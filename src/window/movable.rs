@@ -77,7 +77,8 @@ impl AppWindow {
 
     /// Leaving a layout: its windows close (the kept ones come back with it).
     pub(super) fn close_windows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let ids: Vec<String> = self.overlays.iter().filter(|o| o.kind == OverlayKind::Window).map(|o| o.id.clone()).collect();
+        // The layout's windows go with it; the app's own (What's new) stay.
+        let ids: Vec<String> = self.overlays.iter().filter(|o| o.kind == OverlayKind::Window && !o.frame).map(|o| o.id.clone()).collect();
         for id in ids {
             self.remove_overlay(&id, window, cx);
         }

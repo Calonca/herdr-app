@@ -268,6 +268,9 @@ struct Overlay {
     /// A window: where its top left is (None: centered) and its name (`key`).
     place: Option<Point<Pixels>>,
     key: Option<String>,
+    /// The app's own screen (a `frame-` mod: What's new, the welcome): only
+    /// its own close ends it, never a layout switch.
+    frame: bool,
 }
 
 struct Drag {
@@ -3018,6 +3021,7 @@ impl AppWindow {
             bare: spec.get("frame").and_then(Value::as_str) == Some("none"),
             place,
             key: key.clone(),
+            frame: spec.get("mod").and_then(Value::as_str).is_some_and(|m| m.starts_with("frame-")),
         });
         if let Some(k) = &key {
             if spec.get("keep").and_then(Value::as_bool) == Some(true) {

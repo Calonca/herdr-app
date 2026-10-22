@@ -2,9 +2,8 @@
 // update that brings one (the app opens it when shared "frame.whatsnew" isn't
 // its key yet; people who just got the welcome never see it) and with
 // `app.whats_new`. Props from the app: { key }. Closing it marks it seen.
-// A card's button does the thing right there, never a layout switch (that
-// would close this window before it's read). A new release replaces
-// this page's content.
+// Only its own close ends it: the app keeps its frame windows through a
+// layout switch. A new release replaces this page's content.
 // This is the app's own mod: rewritten from the binary on every start.
 
 import { View, div, svg, image } from "gpui-kit";
