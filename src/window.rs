@@ -148,7 +148,7 @@ fn write_atomic(path: &std::path::Path, text: &str) -> bool {
 
 /// This release's "What's new" (defaults/frame/whatsnew): shown once to
 /// people who had Herdr before. A new page gets a new key.
-const WHATS_NEW: &str = "new-look";
+const WHATS_NEW: &str = "agents-sidebar";
 
 /// The mods a layout file names that aren't in mods/ (frame mods are always there).
 fn missing_mods(name: &str) -> Vec<String> {

@@ -8,16 +8,9 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar } from "gpui-base";
-import { run, theme, props, closeOverlay, setShared, shared, keys } from "herdr";
+import { theme, props, closeOverlay, setShared } from "herdr";
 
 const W = (name) => `mods/workspace-chrome/${name}.svg`;
-const REMOVED = ["zen", "t4", "ade"];
-
-// The key bound to a command, as people press it: "Ctrl+Shift+P".
-function bound(action) {
-  const k = keys().find((b) => b.section === "global" && b.action === action);
-  return k ? k.keys.split("-").map((p) => (p === "cmd" ? "\u2318" : p.charAt(0).toUpperCase() + p.slice(1))).join("+") : null;
-}
 
 export default class WhatsNew extends View {
   init(_props, cx) {
@@ -52,68 +45,58 @@ export default class WhatsNew extends View {
       .child(label);
   }
 
-  // The Herdr layout drawn small, in the theme's colors.
+
+  // The agents sidebar drawn small, in the theme's colors: a pinned agent on
+  // top, then the priority sections.
   sketch(t) {
-    const row = () => div().flex().flex_row();
-    const col = () => div().flex().flex_col();
-    const line = (w, c = t.dim) => div().h(3).w(w).flex_none().rounded(2).bg(c);
-    const space = (c, w, on) => row().h(12).px(4).gap(4).items_center().rounded(3).when(on, (el) => el.bg(t.selected)).child(div().size(6).rounded(2).bg(c)).child(line(w, t.muted));
-    const card = (lines) =>
-      col()
-        .flex_1()
+    const section = (label) => h_flex().h(20).px(8).items_center().text_size(10).font_medium().text_color(t.dim).child(label);
+    const dot = (c) => div().size(6).mx(2).flex_none().rounded_full().bg(c);
+    const agent = (name, where, status, opts = {}) =>
+      h_flex()
+        .h(22)
+        .px(8)
+        .gap(5)
+        .items_center()
         .rounded(5)
-        .border_1()
-        .border_color(t.border)
-        .bg(t.background)
-        .child(row().h(9).px(4).items_center().border_b(1).border_color(t.border).child(line(18)))
-        .child(col().gap(3).p(5).children(lines.map((w) => line(w, t.dim))));
-    return row()
+        .when(Boolean(opts.on), (el) => el.bg(t.selected))
+        .child(h_flex().flex_1().min_w(0).text_size(11).child(div().text_color(t.foreground).child(name)).child(div().truncate().text_color(t.dim).child(`\u00a0\u00b7 ${where}`)))
+        .when(Boolean(opts.pin), (el) => el.child(svg(W("pin")).size(10).flex_none().text_color(t.muted)))
+        .child(status);
+    const needs = div().flex_none().px(4).h(13).rounded(4).bg(t.blocked + "26").text_size(8.5).font_semibold().text_color(t.blocked).flex().items_center().child("Needs you");
+    const spin = () => svg(W("spinner")).size(10).flex_none().text_color(t.working);
+    return v_flex()
       .flex_none()
-      .w(250)
-      .h(150)
+      .w(230)
+      .p(6)
       .rounded(10)
       .overflow_hidden()
       .border_1()
       .border_color(t.border)
-      .bg(t.canvas ?? t.background)
+      .bg(t.chrome ?? t.surface)
       .child(
-        col()
-          .w(74)
-          .p(5)
-          .gap(2)
-          .bg(t.chrome ?? t.surface)
-          .border_r(1)
-          .border_color(t.border)
-          .child(line(26, t.dim))
-          .child(div().h(4))
-          .child(space("#22a99a", 30, true))
-          .child(row().h(10).pl(12).items_center().child(line(24, t.dim)))
-          .child(space("#e3814f", 26))
-          .child(space("#5b8def", 34))
-          .child(div().h(6))
-          .child(line(20, t.dim))
-          .child(row().h(10).gap(3).items_center().child(div().size(5).rounded_full().bg(t.working)).child(line(32, t.muted))),
+        h_flex()
+          .h(22)
+          .px(8)
+          .items_center()
+          .justify_between()
+          .text_size(10.5)
+          .font_medium()
+          .text_color(t.dim)
+          .child("Agents")
+          .child(svg(W("clock")).size(11).text_color(t.dim)),
       )
-      .child(
-        col()
-          .flex_1()
-          .child(
-            row()
-              .h(16)
-              .px(5)
-              .gap(3)
-              .items_center()
-              .border_b(1)
-              .border_color(t.border)
-              .child(div().w(22).h(9).rounded(3).bg(t.raised).border_1().border_color(t.border))
-              .child(div().w(18).h(9).rounded(3))
-              .child(div().w(18).h(9).rounded(3)),
-          )
-          .child(row().flex_1().p(5).gap(5).child(card([40, 28, 34, 20])).child(card([30, 36]))),
-      );
+      .child(section("Pinned"))
+      .child(agent("claude", "api", spin(), { pin: true, on: true }))
+      .child(section("Needs you"))
+      .child(agent("pi", "web", needs))
+      .child(section("Done"))
+      .child(agent("codex", "docs", dot(t.done ?? t.accent)))
+      .child(section("Working"))
+      .child(agent("pi", "herdr", spin()))
+      .child(agent("claude", "infra", spin()));
   }
 
-  card(t, icon, title, body, action) {
+  card(t, icon, title, body) {
     return v_flex()
       .flex_1()
       .min_w(0)
@@ -130,9 +113,7 @@ export default class WhatsNew extends View {
           .child(icon)
           .child(div().flex_1().min_w(0).text_size(14).font_semibold().text_color(t.foreground).child(title)),
       )
-      .child(this.para(t, body))
-      .child(div().flex_1())
-      .when(Boolean(action), (el) => el.child(h_flex().child(action)));
+      .child(this.para(t, body));
   }
 
   glyph(t, name) {
@@ -150,9 +131,15 @@ export default class WhatsNew extends View {
       .child(svg(W(name)).size(15).text_color(t.accent));
   }
 
+  fix(t, text) {
+    return h_flex()
+      .gap(8)
+      .items_start()
+      .child(svg(W("check")).size(13).mt(3).flex_none().text_color(t.accent))
+      .child(this.para(t, text));
+  }
+
   body(t) {
-    const pal = bound("app.palette");
-    const old = REMOVED.includes(shared("layout"));
     return v_flex()
       .gap(14)
       .child(
@@ -164,85 +151,55 @@ export default class WhatsNew extends View {
               .flex_1()
               .min_w(0)
               .gap(8)
-              .child(div().text_size(20).font_semibold().text_color(t.foreground).child("The Herdr layout is the new default"))
-              .child(this.para(t, "Spaces on the left, tabs on top: the Herdr you know. Your agents and the helpers they start sit under your spaces, every pane is a card, and Files and Changes panels open from the tab bar."))
-              .when(old, (el) => el.child(h_flex().pt(4).child(this.button(t, "wn-main", "Switch to Herdr", true, () => run("layout.switch", { name: "main" }))))),
+              .child(div().text_size(20).font_semibold().text_color(t.foreground).child("See the agents that need you first"))
+              .child(this.para(t, "The agents sidebar has a second view. Click the button by its title and pick Priority: agents waiting on you on top, then the ones that just finished, then the ones still working. Grouped by space is still there.")),
           )
           .child(this.sketch(t)),
       )
       .child(
-        div()
-          .p(12)
-          .rounded(10)
-          .bg(t.raised)
-          .child(this.para(t, "Your terminals kept running through the update. Your spaces and tabs start fresh in this version: they come back grouped as before and named after their folders, so rename any you like.")),
-      )
-      .child(
         h_flex()
           .gap(12)
           .items_stretch()
           .child(
             this.card(
               t,
-              this.glyph(t, "server"),
-              "Your other machines",
-              "Add a server or a Mac mini from your ssh config, in one click. Its spaces show in the same sidebar, and its agents keep working while your laptop sleeps.",
-              this.button(t, "wn-machine", "Add a machine", false, () => run("mod.open", { name: "machine-add" })),
+              this.glyph(t, "pin"),
+              "Pin the ones you're watching",
+              "Hover an agent and click the pin. Pinned agents stay on top in both views until they end.",
             ),
           )
           .child(
             this.card(
               t,
-              this.glyph(t, "git-branch"),
-              "Spaces and worktrees, the Herdr way",
-              "New spaces are named after the repo they're in and new tabs are numbered, until you rename them. The sidebar shows each branch, unpushed commits and uncommitted changes. Right-click a space for New and Open worktree.",
-              null,
+              this.glyph(t, "chevron-down"),
+              "Fold what you don't need",
+              "Click a space or section header to fold it. Folded, it shows how many agents are inside.",
             ),
           ),
       )
       .child(
-        h_flex()
-          .gap(16)
+        this.card(
+          t,
+          this.glyph(t, "server"),
+          "Your agents' sandboxes stay out of sight",
+          "Machines an agent starts for itself (hc machine add --temp) no longer show up in your spaces or machine lists.",
+        ),
+      )
+      .child(
+        v_flex()
+          .gap(6)
           .p(14)
-          .items_center()
           .rounded(12)
-          .border_1()
-          .border_color(t.border)
-          .bg(t.background)
-          .child(image("layouts/win98.svg").w(192).h(120).rounded(8).flex_none())
-          .child(
-            v_flex()
-              .flex_1()
-              .min_w(0)
-              .gap(8)
-              .child(div().text_size(14).font_semibold().text_color(t.foreground).child("New: Herdr 98"))
-              .child(this.para(t, `A whole desktop in one layout: a glimpse of how far you can take Herdr. Every part of it is a file you or your agent can change. Try it from Settings \u203a Look${pal ? ` or the command palette (${pal})` : ""}.`)),
-          ),
-      )
-      .child(
-        h_flex()
-          .gap(12)
-          .items_stretch()
-          .child(
-            this.card(
-              t,
-              this.glyph(t, "monitor"),
-              "Light and dark",
-              "Themes follow your system now, or pick one. The window also opens at the size you left it.",
-              this.button(t, "wn-look", "Open Settings", false, () => run("app.settings", { section: "look" })),
-            ),
-          )
-          .child(
-            this.card(
-              t,
-              this.glyph(t, "x"),
-              "No longer built in: Zen, T4 and ADE",
-              "If you used one, switch to Herdr in Settings \u203a Look, or ask your agent to rebuild it from your layout file.",
-              null,
-            ),
-          ),
+          .bg(t.raised)
+          .child(div().pb(2).text_size(14).font_semibold().text_color(t.foreground).child("Fixed"))
+          .child(this.fix(t, "The agents list keeps its place when you scroll, instead of jumping back to the top."))
+          .child(this.fix(t, "An agent you're in moves to its new section right away."))
+          .child(this.fix(t, "A pane closes when its terminal finishes, instead of showing \"has finished\"."))
+          .child(this.fix(t, "On macOS, the red close button hides Herdr instead of leaving it without a window."))
+          .child(this.fix(t, "Mods reload cleanly when you save them, and tell you when a save didn't load.")),
       );
   }
+
 
   render() {
     const t = theme();
