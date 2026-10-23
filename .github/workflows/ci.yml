@@ -1,0 +1,65 @@
+# Every push and pull request: build and test on Linux, the cheap runner.
+# The four-platform builds run in release.yml.
+#
+# Cache rules (learned in Herdr 1.x's CI): one pinned toolchain so caches
+# don't die on a stable bump; only master pushes save, so PR and branch
+# caches can't evict the ones everybody restores; libghostty's Zig build
+# lives in Cargo's OUT_DIR, kept with the workspace crates.
+name: ci
+
+on:
+  push:
+    branches: [master]
+    paths-ignore: [".brain/**", "**/*.md"]
+  # No paths-ignore here: CI is required to merge, so every PR needs it.
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to a pull request makes the older run pointless. On master,
+# runs queue instead: a cancelled master run never saves the cache.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  RUST_TOOLCHAIN: 1.95.0
+  # File/line backtraces without full debug info: smaller target, faster cache.
+  CARGO_PROFILE_DEV_DEBUG: "1"
+  CARGO_PROFILE_TEST_DEBUG: "1"
+  SAVE_CACHES: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+jobs:
+  test:
+    # Release's Linux build runs on 22.04 (glibc floor): test on the same.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.16.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: linux-x86_64-dev
+          cache-workspace-crates: true
+          cache-bin: false
+          save-if: ${{ env.SAVE_CACHES }}
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config clang libclang-dev \
+            libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libvulkan-dev libfontconfig-dev libfreetype-dev
+      # Tests don't need the optimized dependencies Cargo.toml asks for in
+      # dev builds (they make Can's debug app fast): unoptimized compiles
+      # far quicker on CI's small runner. One command builds the app too.
+      - run: cargo test --locked --config 'profile.dev.package."*".opt-level=0'

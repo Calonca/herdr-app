@@ -1,0 +1,178 @@
+# A release of the app: push a tag `v<version>` matching Cargo.toml. Each
+# platform builds and packs the app (scripts/package; no core inside, people
+# get the core's own release); then everything goes to the
+# releases bucket, versioned files first and app/latest.json last, so nobody
+# sees a version whose files aren't there yet.
+#
+# Caches: a tag's own cache is visible only to that tag, so tags restore
+# master's. Master keeps them warm by building (without publishing) when
+# what the build depends on changes: Cargo.lock, the vendored crates, the
+# toolchain, this workflow. Let that run finish before tagging.
+#
+# The cache is the whole target/, with scripts/ci-sources keeping unchanged
+# files fresh to Cargo: the vendored crates (gpui-kit, taffy, ghostty) are
+# the slow part, and a fresh checkout would otherwise rebuild them all.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [master]
+    paths:
+      - Cargo.lock
+      - Cargo.toml
+      - vendor/**
+      - crates/**
+      - scripts/package
+      - scripts/ci-sources
+      - .github/workflows/release.yml
+  # Builds only; publishing needs a tag.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never cancel: a cancelled master build saves no cache, a cancelled tag no release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RUST_TOOLCHAIN: 1.95.0
+  IS_TAG: ${{ github.ref_type == 'tag' }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # Linux on the oldest Ubuntu we can: the app links the system's
+          # glibc, so this sets how old a distro it runs on.
+          - { target: linux-x86_64, runner: ubuntu-22.04 }
+          - { target: linux-aarch64, runner: ubuntu-22.04-arm }
+          - { target: macos-aarch64, runner: macos-15 }
+          # Built on Apple Silicon: Intel runners take four times as long.
+          - { target: macos-x86_64, runner: macos-15, rust-target: x86_64-apple-darwin }
+          - { target: windows-x86_64, runner: windows-2022 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.rust-target }}
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.16.0
+      - name: Restore build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: &cache-paths |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: release-v1-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            release-v1-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}-
+            release-v1-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config clang libclang-dev \
+            libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libvulkan-dev libfontconfig-dev libfreetype-dev
+      # bindgen's libclang: the runner image's LLVM.
+      - name: Windows build dependencies
+        if: runner.os == 'Windows'
+        run: echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
+      - name: Version matches the tag
+        if: env.IS_TAG == 'true'
+        run: |
+          want="v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          [ "$want" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME but Cargo.toml says $want"; exit 1; }
+      - name: Keep unchanged sources fresh
+        run: scripts/ci-sources restore
+      - name: Build and pack
+        env:
+          RELEASES_URL: ${{ vars.RELEASES_URL }}
+        run: scripts/package ${{ matrix.rust-target }}
+      - name: Note the sources the cache was built from
+        if: github.ref == 'refs/heads/master'
+        run: scripts/ci-sources record
+      - name: Save build cache
+        if: github.ref == 'refs/heads/master'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: *cache-paths
+          key: release-v1-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: herdr-app-${{ matrix.target }}
+          path: dist/herdr-app-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    # Only a tag push by Can publishes: anyone with write access can re-run an
+    # old tag's run, which would point latest.json back at that version.
+    if: github.event_name == 'push' && github.ref_type == 'tag' && github.triggering_actor == 'ogulcancelik'
+    # The R2 keys live here, usable only from v* tags.
+    environment: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      ENDPOINT: https://${{ vars.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      BUCKET: ${{ vars.R2_BUCKET }}
+      RELEASES_URL: ${{ vars.RELEASES_URL }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Manifest
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          core=$(tr -d '[:space:]' < distribution/core-version)
+          python3 - "$version" "$core" <<'PY'
+          import hashlib, json, pathlib, sys, os
+          version, core = sys.argv[1], sys.argv[2]
+          base = os.environ["RELEASES_URL"]
+          targets = {}
+          for f in sorted(pathlib.Path("dist").glob("herdr-app-*.tar.gz")):
+              t = f.name.removeprefix("herdr-app-").removesuffix(".tar.gz")
+              targets[t] = {"url": f"{base}/app/{version}/{f.name}", "sha256": hashlib.sha256(f.read_bytes()).hexdigest()}
+          # core_min: the oldest core this app works with.
+          doc = {"version": version, "core_min": core, "notes": f"Herdr {version}", "targets": targets}
+          pathlib.Path("dist/manifest.json").write_text(json.dumps(doc, indent=2) + "\n")
+          print(json.dumps(doc, indent=2))
+          PY
+      - name: Upload
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          s3() { aws s3 cp --endpoint-url "$ENDPOINT" "$@"; }
+          for f in dist/herdr-app-*.tar.gz dist/manifest.json; do
+            s3 "$f" "s3://$BUCKET/app/$version/$(basename "$f")" --cache-control "public, max-age=31536000, immutable"
+          done
+          s3 dist/manifest.json "s3://$BUCKET/app/latest.json" --cache-control "no-cache" --content-type application/json
+          # 0.1.0/0.1.1 set to the preview channel still ask here.
+          s3 dist/manifest.json "s3://$BUCKET/app/preview/latest.json" --cache-control "no-cache" --content-type application/json
+          s3 distribution/install.sh "s3://$BUCKET/app/install.sh" --cache-control "no-cache" --content-type text/x-shellscript
+          s3 distribution/install.ps1 "s3://$BUCKET/app/install.ps1" --cache-control "no-cache" --content-type text/plain

@@ -1,0 +1,71 @@
+[workspace]
+members = ["crates/ghostty-sys"]
+exclude = ["vendor/gpui-kit", "vendor/gpui-pre-linux", "vendor/gpui-pre-macos", "vendor/taffy"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+publish = false
+
+[package]
+name = "herdr-app"
+version = "0.1.3"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ghostty-sys = { path = "crates/ghostty-sys" }
+gpui = { package = "gpui-pre", version = "=0.3.8" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui-shell = { path = "vendor/gpui-kit/crates/shell" }
+gpui-base = { path = "vendor/gpui-kit/crates/base" }
+anyhow = "1"
+async-channel = "2"
+base64 = "0.22"
+image = { version = "0.25", default-features = false }
+png = "0.17"
+ttf-parser = "0.25"
+smallvec = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+fancy-regex = "0.19"
+notify = "7"
+sha2 = "0.10"
+
+[dev-dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.8", features = ["test-support"] }
+gpui-shell = { path = "vendor/gpui-kit/crates/shell", features = ["render-test-support"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+uds_windows = "1.2"
+raw-window-handle = "0.6"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Console", "Win32_Media_Multimedia"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+# gpui-shell's LLRT modules must share its quickjs-jit VM; gpui-kit's own workspace does the same.
+[patch.crates-io]
+rquickjs = { path = "vendor/gpui-kit/crates/shell/rquickjs-compat" }
+# Our copy: an idle window stops waking every vsync (patches marked HERDR:).
+gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
+# Our copy: snapping a maximized window to a half kept its old size (HERDR:).
+gpui-pre-linux = { path = "vendor/gpui-pre-linux" }
+# Our copy: a flex item's min-content was measured even when unused (HERDR:).
+taffy = { path = "vendor/taffy" }
+
+# With --target (CI builds Intel Macs on Apple Silicon), stripping a macOS
+# proc-macro loses what rustc loads from it: "can't find crate". Build-time
+# code only; the app itself is still stripped.
+[profile.release.build-override]
+strip = "none"
+
+[profile.dev.package."*"]
+opt-level = 2
