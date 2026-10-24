@@ -3,9 +3,10 @@
 // state, and how long it has been in that state. "done" means it finished
 // while you weren't looking. Two views (the button by the title picks,
 // `shared("agents.sort")`): priority, under Needs you (blocked), Done, Working
-// and Idle (folded at first), the latest change first in each; or grouped, under
-// a header per space. In priority an agent sits where its most urgent sub-agent
-// would (a done agent you look at stays with Done until you leave it). A header folds its group. Hovering a row shows a pin: pinned agents sit in Pinned on top in both
+// and Idle, the latest change first in each; or grouped, under a header per
+// space. In priority an agent sits where its most urgent sub-agent would (a done
+// agent you look at stays with Done until you leave it). A header folds its
+// group. Hovering a row shows a pin: pinned agents sit in Pinned on top in both
 // views, in the order pinned (this screen only; a pin goes when its agent
 // ends). Click a row to jump there.
 // Sub-agents (terminals an agent started with `hc run`) hang under it as a
@@ -62,7 +63,7 @@ function icon(p, size, color) {
 export default class Agents extends View {
   init(_props, cx) {
     if (props()?.sortMenu) return;
-    this.folded = new Set([`sec-${RANK.idle}`]);
+    this.folded = new Set();
     // Each agent's last state and when it changed (ms), kept across restarts.
     this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}");
     this.pins = JSON.parse(localStorage.getItem("pins") ?? "[]");
