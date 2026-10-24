@@ -392,7 +392,10 @@ you use the same list. `herdr-app commands` prints every one with its arguments
   `pane.zoom {pane?}`, `pane.focus {pane | terminal}`, `pane.go {direction}`, `pane.swap {direction}`.
 - Terminals: `terminal.open {argv?, folder?, place?}`, `terminal.kill {terminal}`,
   `terminal.keep {terminal, place?}`, `terminal.park {terminal}`,
-  `terminal.show {terminal?, pane?}`, `terminal.copy`, `terminal.paste`,
+  `terminal.show {terminal?, pane?}`, `terminal.copy`, `terminal.paste` (an image
+  alone, into a terminal on another machine: copied there, its path pasted; a
+  local program reads the clipboard itself), `terminal.paste_image` (Ctrl+V: the
+  same for an image; otherwise Ctrl+V goes to the program),
   `terminal.right_click {to: "program" | "menu", terminal?}` (where right-clicks go
   when the program takes the mouse; kept as its label `herdr.right-click=program`;
   Shift+right-click is always Herdr's menu).

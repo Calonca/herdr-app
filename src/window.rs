@@ -2032,11 +2032,12 @@ impl AppWindow {
     /// A space with its first tab and terminal, shown at once.
     /// `machine`: another machine (`hc machine ls`); its space starts in that machine's home.
     fn new_space(&mut self, name: &str, folder: Option<String>, ctx_name: Option<&str>, argv: Option<Vec<String>>, task: Option<&str>, machine: Option<String>) -> Result<Value, String> {
-        let folder = match &machine {
-            Some(_) => folder.unwrap_or_default(),
-            None => folder.or_else(|| self.model.focused_pane().and_then(|p| self.model.address_of(&p)).and_then(|a| self.cwds.get(&a).cloned())).unwrap_or_else(home),
-        };
         let on = machine.as_deref();
+        // The focused pane's folder only means something on its own machine.
+        let here = || self.model.focused_pane().and_then(|p| self.model.address_of(&p))
+            .filter(|a| a.split_once('/').map(|(m, _)| m) == on)
+            .and_then(|a| self.cwds.get(&a).cloned());
+        let folder = folder.or_else(here).unwrap_or_else(|| if on.is_some() { String::new() } else { home() });
         let (space, ctx, pane) = (self.model.fresh_id_on("sp", on), self.model.fresh_id_on("tb", on), self.model.fresh_id_on("p", on));
         let addr = self.spawn(Self::agent_argv(argv.clone(), task, on).or(argv), folder.clone(), &space, &ctx, on)?;
         let ctx_name = ctx_name.map(str::trim).unwrap_or_default();
@@ -2312,7 +2313,12 @@ impl AppWindow {
     /// Runs a command for the person (keys, clicks, menus, mods): a missing
     /// name is asked for.
     fn run(&mut self, name: &str, args: Value, window: &mut Window, cx: &mut Context<Self>) {
-        self.run_as(name, args, true, window, cx);
+        // A click or key has nobody to read the reply: say why no terminal started.
+        let starts = matches!(name.split(':').next(), Some("space.new" | "tab.new" | "pane.split" | "terminal.open"));
+        if let Some(error) = self.run_as(name, args, true, window, cx).get("error").and_then(Value::as_str).filter(|_| starts) {
+            let spec = json!({"kind":"toast", "notification":{"title":format!("{name} failed"),"body":error,"level":"error"}});
+            self.open_overlay(mods::new_overlay_id(), spec, window, cx);
+        }
     }
 
     /// Runs a command and says what it made or why not. Scripts and agents
@@ -2645,10 +2651,13 @@ impl AppWindow {
                     self.focused_pane = None;
                 }
             }
-            "terminal.copy" | "terminal.paste" => {
-                let paste = name == "terminal.paste";
+            "terminal.copy" | "terminal.paste" | "terminal.paste_image" => {
                 if let Some(t) = self.focused_pane.as_ref().and_then(|p| self.terms.get(p)) {
-                    t.view.update(cx, |v, cx| if paste { v.paste(cx) } else { v.copy(cx) });
+                    t.view.update(cx, |v, cx| match name {
+                        "terminal.paste" => v.paste(cx),
+                        "terminal.paste_image" => v.paste_image(cx),
+                        _ => v.copy(cx),
+                    });
                 }
                 return;
             }

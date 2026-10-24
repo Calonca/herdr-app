@@ -348,6 +348,12 @@ impl TerminalView {
             let bytes = self.grid.borrow().vt.paste_bytes(&text);
             return self.send(&bytes);
         }
+        self.put_there(paths, false, cx);
+    }
+
+    /// Copies files to this terminal's machine (`hc put`) and pastes their
+    /// paths there; `copies`: the local files were only for sending.
+    fn put_there(&self, paths: Vec<std::path::PathBuf>, copies: bool, cx: &mut Context<Self>) {
         let addr = self.address.clone();
         cx.spawn(async move |this, cx| {
             let there = cx
@@ -356,7 +362,11 @@ impl TerminalView {
                     paths
                         .iter()
                         .filter_map(|p| {
-                            let out = crate::spawn::command(crate::core_bin::path()).args(["put", "--json", &addr]).arg(p).output().ok()?;
+                            let out = crate::spawn::command(crate::core_bin::path()).args(["put", "--json", &addr]).arg(p).output();
+                            if copies {
+                                let _ = std::fs::remove_file(p);
+                            }
+                            let out = out.ok()?;
                             let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
                             v.get("path").and_then(|p| p.as_str()).map(str::to_owned)
                         })
@@ -373,11 +383,37 @@ impl TerminalView {
         .detach();
     }
 
+    /// Text as a paste; an image alone (a screenshot) for a terminal on another machine.
     pub fn paste(&mut self, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
             let bytes = self.grid.borrow().vt.paste_bytes(&text);
             self.send(&bytes);
+        } else {
+            self.send_image(cx);
         }
+    }
+
+    /// Ctrl+V: the image for a terminal on another machine; otherwise the key goes on.
+    pub fn paste_image(&mut self, cx: &mut Context<Self>) {
+        if self.send_image(cx) {
+            return;
+        }
+        let bytes = Keystroke::parse("ctrl-v").ok().and_then(|k| key_bytes(&mut self.grid.borrow_mut().vt, &k));
+        if let Some(bytes) = bytes {
+            self.send(&bytes);
+        }
+    }
+
+    /// An agent on another machine reads that machine's clipboard, so this
+    /// one's image goes there as a file, and its path is pasted. A local
+    /// program reads the clipboard itself: nothing to do.
+    fn send_image(&self, cx: &mut Context<Self>) -> bool {
+        if !self.address.contains('/') {
+            return false;
+        }
+        let Some(path) = cx.read_from_clipboard().and_then(|item| image_file(&item)) else { return false };
+        self.put_there(vec![path], true, cx);
+        true
     }
 
     /// Copies the selection to the clipboard (and the primary selection on Linux).
@@ -517,6 +553,27 @@ fn quote_paths(paths: impl IntoIterator<Item = String>) -> String {
     let mut out: String = paths.into_iter().map(quote).collect::<Vec<_>>().join(" ");
     out.push(' ');
     out
+}
+
+/// The clipboard's image saved to a file of its own, for its path to be pasted.
+fn image_file(item: &ClipboardItem) -> Option<std::path::PathBuf> {
+    let image = item.entries().iter().find_map(|e| match e {
+        ClipboardEntry::Image(i) => Some(i),
+        _ => None,
+    })?;
+    let ext = match image.format {
+        ImageFormat::Jpeg => "jpg",
+        ImageFormat::Gif => "gif",
+        ImageFormat::Webp => "webp",
+        ImageFormat::Bmp => "bmp",
+        ImageFormat::Tiff => "tiff",
+        ImageFormat::Svg => "svg",
+        _ => "png",
+    };
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
+    let path = std::env::temp_dir().join(format!("herdr-paste-{stamp}.{ext}"));
+    std::fs::write(&path, &image.bytes).ok()?;
+    Some(path)
 }
 
 fn link_mods(m: &Modifiers) -> bool {
