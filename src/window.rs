@@ -341,8 +341,8 @@ pub struct AppWindow {
     listed_once: bool,
     /// Live folders by address (from the shell process).
     cwds: HashMap<String, String>,
-    /// When each terminal's repo and branch were last read.
-    folders_checked: HashMap<String, Instant>,
+    /// When each terminal's repo and branch were last read, and what it was doing.
+    folders_checked: HashMap<String, FolderCheck>,
     /// When Herdr started each terminal: a listing already in flight can't know them yet.
     born: RefCell<HashMap<String, Instant>>,
     /// Connection epoch: ignore replies from an old connection.
@@ -1877,7 +1877,7 @@ impl AppWindow {
     /// Reads each terminal's live folder, and its repo and branch for mods.
     fn track_folders(&mut self, cx: &mut Context<Self>) {
         let home = mods::home().to_string_lossy().into_owned();
-        let mut todo = Vec::new();
+        let mut todo: HashMap<(Option<String>, String), Vec<String>> = HashMap::new();
         let mut moved = false;
         for (addr, rec) in &self.live {
             // Core's live folder of what runs there (any machine), else the shell's (local).
@@ -1890,13 +1890,17 @@ impl AppWindow {
                 .or_else(|| rec.get("pid").and_then(Value::as_u64).filter(|_| !addr.contains('/')).and_then(crate::process_cwd::read).map(|p| p.to_string_lossy().into_owned()))
                 .or_else(|| rec.get("cwd").and_then(Value::as_str).map(str::to_owned));
             let Some(cwd) = cwd else { continue };
-            // A checkout changes the branch without moving the folder: look again now and then.
-            let stale = self.folders_checked.get(addr).is_none_or(|t| t.elapsed() > FOLDER_RECHECK);
-            if self.cwds.get(addr) != Some(&cwd) || stale {
+            let busy = busy(rec);
+            let last = self.folders_checked.get_mut(addr);
+            if recheck(last.as_deref(), &cwd, busy, self.window_active) {
                 moved |= self.cwds.get(addr) != Some(&cwd);
                 self.cwds.insert(addr.clone(), cwd.clone());
-                self.folders_checked.insert(addr.clone(), Instant::now());
-                todo.push((addr.clone(), cwd));
+                let repo = last.as_ref().is_none_or(|l| l.cwd != cwd || l.repo); // until git says otherwise
+                self.folders_checked.insert(addr.clone(), FolderCheck { at: Instant::now(), cwd: cwd.clone(), busy, repo });
+                // Another machine's terminal (`vps/t7`): git runs there.
+                todo.entry((addr.split_once('/').map(|(m, _)| m.to_owned()), cwd)).or_insert_with(Vec::new).push(addr.clone());
+            } else if let Some(last) = last {
+                last.busy = busy;
             }
         }
         self.folders_checked.retain(|a, _| self.live.contains_key(a));
@@ -1904,15 +1908,25 @@ impl AppWindow {
         if moved {
             self.save();
         }
-        for (addr, cwd) in todo {
+        // Once per machine and folder, however many terminals are there.
+        for ((on, cwd), addrs) in todo {
             let home = home.clone();
             cx.spawn(async move |this, cx| {
-                // Another machine's terminal (`vps/t7`): git runs there.
-                let on = addr.split_once('/').map(|(m, _)| m.to_owned());
-                let info = cx.background_executor().spawn(async move { folder_info(&cwd, &home, on.as_deref()) }).await;
+                let asked = cwd.clone();
+                let (info, repo) = cx.background_executor().spawn(async move { folder_info(&asked, &home, on.as_deref()) }).await;
                 let _ = this.update(cx, |this, cx| {
-                    if this.model.folder_info.get(&addr) != Some(&info) {
-                        this.model.folder_info.insert(addr, info);
+                    let mut changed = false;
+                    // Not one that moved on meanwhile: its own answer is coming.
+                    for addr in addrs.into_iter().filter(|a| this.cwds.get(a) == Some(&cwd)) {
+                        if let Some(check) = this.folders_checked.get_mut(&addr) {
+                            check.repo = repo;
+                        }
+                        if this.model.folder_info.get(&addr) != Some(&info) {
+                            this.model.folder_info.insert(addr, info.clone());
+                            changed = true;
+                        }
+                    }
+                    if changed {
                         this.publish(cx);
                         cx.notify();
                     }
@@ -3863,30 +3877,62 @@ fn overlay_layout(mut n: Node, overlay: &str) -> Node {
     n
 }
 
+/// What a terminal's folder last said about its repo, and what ran there then.
+struct FolderCheck {
+    at: Instant,
+    cwd: String,
+    busy: bool,
+    /// A repo, or git couldn't say (a machine unreachable): worth a look again.
+    repo: bool,
+}
+
+/// Changes made outside Herdr (a commit in another app): looked for this often,
+/// in repos, while the window is in front.
+const FOLDER_FALLBACK: Duration = Duration::from_secs(60);
+
+/// An agent working, or a program other than the shell in front (an agent
+/// between turns isn't, even started from a shell).
+fn busy(rec: &Value) -> bool {
+    let program = |k: &str| rec["program"][k].as_bool() == Some(true);
+    rec["status"] == "working" || !(program("shell") || program("agent"))
+}
+
+/// Whether to ask a terminal's folder for its repo and branch again: only when
+/// the answer could have changed. It moved, a command or an agent's turn just
+/// ended there (a checkout, a commit), or a repo's fallback is due.
+fn recheck(last: Option<&FolderCheck>, cwd: &str, busy: bool, active: bool) -> bool {
+    let Some(last) = last else { return true };
+    last.cwd != cwd || (last.busy && !busy) || (active && last.repo && last.at.elapsed() > FOLDER_FALLBACK)
+}
+
 /// The repo a folder is in (a worktree counts as its main checkout's), else the
-/// folder itself, and the branch.
-const FOLDER_RECHECK: Duration = Duration::from_secs(10);
+/// folder itself, and the branch; and whether it is a repo (or git couldn't say).
 /// How long a missing terminal the core couldn't answer for waits before the next look.
 
 /// Set once the app starts quitting, the OS ending the session included: the
 /// saved layout stays as it was.
 pub static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-fn folder_info(cwd: &str, home: &str, on: Option<&str>) -> model::FolderInfo {
+fn folder_info(cwd: &str, home: &str, on: Option<&str>) -> (model::FolderInfo, bool) {
+    let none = model::FolderInfo { top: cwd.into(), branch: None };
     if on.is_none() && cwd == home {
-        return model::FolderInfo { top: cwd.into(), branch: None };
+        return (none, false);
     }
     let args = ["-C", cwd, "rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD"].map(str::to_owned);
-    let stdout = match on {
-        Some(m) => mods::run_remote(m, "git", &args, None).ok().filter(|(code, ..)| *code == 0).map(|(_, out, _)| out),
-        None => crate::spawn::command("git").args(&args).output().ok().filter(|o| o.status.success()).map(|o| o.stdout),
+    let ran = match on {
+        Some(m) => mods::run_remote(m, "git", &args, None).ok().map(|(code, out, err)| (code == 0, out, err)),
+        None => crate::spawn::command("git").args(&args).output().ok().map(|o| (o.status.success(), o.stdout, o.stderr)),
     };
-    let out = stdout.map(|o| String::from_utf8_lossy(&o).lines().map(str::to_owned).collect::<Vec<_>>()).unwrap_or_default();
-    let [top, head] = out.as_slice() else {
-        return model::FolderInfo { top: cwd.into(), branch: None };
+    let Some((true, out, _)) = ran else {
+        // Only git's own "no" means no repo; a failed run, a repo without commits
+        // or one git won't read are asked again.
+        let no = ran.is_some_and(|(_, _, err)| String::from_utf8_lossy(&err).to_lowercase().contains("not a git repository"));
+        return (none, !no);
     };
+    let out: Vec<String> = String::from_utf8_lossy(&out).lines().map(str::to_owned).collect();
+    let [top, head] = out.as_slice() else { return (none, true) };
     let branch = (head != "HEAD").then(|| head.clone());
-    model::FolderInfo { top: top.clone(), branch }
+    (model::FolderInfo { top: top.clone(), branch }, true)
 }
 
 fn home() -> String {
@@ -4133,6 +4179,33 @@ impl Render for AppWindow {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_folder_is_asked_again_only_when_its_answer_could_have_changed() {
+        use super::{FOLDER_FALLBACK, FolderCheck, recheck};
+        use std::time::{Duration, Instant};
+        let checked = |busy, repo, ago: Duration| FolderCheck { at: Instant::now() - ago, cwd: "/src".into(), busy, repo };
+        let (now, later) = (Duration::ZERO, FOLDER_FALLBACK + Duration::from_secs(1));
+        assert!(recheck(None, "/src", false, false), "never asked");
+        assert!(!recheck(Some(&checked(false, true, now)), "/src", false, true), "nothing happened");
+        assert!(recheck(Some(&checked(false, true, now)), "/elsewhere", false, false), "it moved");
+        assert!(recheck(Some(&checked(true, true, now)), "/src", false, false), "a command or turn ended");
+        assert!(!recheck(Some(&checked(false, true, now)), "/src", true, true), "one started");
+        assert!(recheck(Some(&checked(false, true, later)), "/src", false, true), "a repo, a minute on, in front");
+        assert!(!recheck(Some(&checked(false, true, later)), "/src", false, false), "not while the window is behind");
+        assert!(!recheck(Some(&checked(false, false, later)), "/src", false, true), "not a repo: never on a timer");
+    }
+
+    #[test]
+    fn busy_is_an_agent_working_or_a_program_in_front_of_the_shell() {
+        let rec = |status: &str, shell: bool, agent: bool| {
+            serde_json::json!({ "status": status, "program": { "shell": shell, "agent": agent } })
+        };
+        assert!(super::busy(&rec("working", false, true)), "an agent's turn");
+        assert!(!super::busy(&rec("done", false, true)), "an agent started from a shell, its turn over");
+        assert!(super::busy(&rec("", false, false)), "vim in front of the shell");
+        assert!(!super::busy(&rec("", true, false)), "the shell's prompt");
+    }
+
     #[test]
     fn shipped_layouts_parse_and_show_what_they_promise() {
         let main = super::default_layout("main");
