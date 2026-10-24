@@ -82,6 +82,8 @@ pub struct TerminalView {
     shown_in: Cell<u64>,
     /// When the person last typed here: output right after is shown at once.
     typed_at: Cell<Option<Instant>>,
+    /// Scrolled this gesture, in lines, toward the next whole one.
+    scrolled: f32,
     _reader: Option<Task<()>>,
 }
 
@@ -137,6 +139,7 @@ impl TerminalView {
             was_focused: false,
             shown_in: Cell::new(0),
             typed_at: Cell::new(None),
+            scrolled: 0.0,
             _reader: None,
         };
         view.connect(core, false, cx);
@@ -445,11 +448,12 @@ impl TerminalView {
             ScrollDelta::Lines(p) => p.y,
             ScrollDelta::Pixels(p) => p.y / g.cell.height,
         };
-        let n = lines.abs().round().max(if lines == 0.0 { 0.0 } else { 1.0 }) as usize;
+        let steps = scroll_steps(&mut self.scrolled, ev.touch_phase, lines, g.vt.rows as f32);
+        let n = steps.unsigned_abs() as usize;
         if n == 0 {
             return;
         }
-        let up = lines > 0.0;
+        let up = steps > 0;
         if g.vt.mouse_tracking() {
             let (x, y) = local(&g, ev.position);
             let button = if up { GHOSTTY_MOUSE_BUTTON_FOUR } else { GHOSTTY_MOUSE_BUTTON_FIVE };
@@ -586,6 +590,26 @@ fn local(g: &Grid, p: Point<Pixels>) -> (f32, f32) {
 }
 
 /// (columns, rows, cell width, cell height) for mouse reports.
+/// Whole lines to scroll for one scroll event. A touchpad sends many small
+/// moves: they add up to a line before one scrolls (as in Zed), and each
+/// gesture starts from nothing. Kept under a screen, so turning back is quick.
+fn scroll_steps(scrolled: &mut f32, phase: TouchPhase, lines: f32, rows: f32) -> i32 {
+    match phase {
+        TouchPhase::Started => {
+            *scrolled = 0.0;
+            0
+        }
+        TouchPhase::Moved => {
+            let before = scrolled.trunc() as i32;
+            *scrolled += lines;
+            let after = scrolled.trunc() as i32;
+            *scrolled %= rows.max(1.0);
+            after - before
+        }
+        _ => 0,
+    }
+}
+
 fn grid_size(g: &Grid) -> (u32, u32, f32, f32) {
     (g.vt.cols as u32, g.vt.rows as u32, f32::from(g.cell.width), f32::from(g.cell.height))
 }
@@ -1171,6 +1195,19 @@ mod tests {
     use super::key_bytes;
     use crate::vt::Vt;
     use gpui::{Keystroke, Modifiers};
+
+    #[test]
+    fn touchpad_moves_add_up_to_whole_lines() {
+        use gpui::TouchPhase::*;
+        let mut s = 0.0;
+        assert_eq!(super::scroll_steps(&mut s, Started, 0.0, 40.0), 0);
+        let total: i32 = (0..12).map(|_| super::scroll_steps(&mut s, Moved, 0.25, 40.0)).sum();
+        assert_eq!(total, 3, "twelve quarter lines: not twelve lines");
+        assert_eq!(super::scroll_steps(&mut s, Moved, 3.0, 40.0), 3, "a mouse wheel's notch");
+        assert_eq!(super::scroll_steps(&mut s, Started, 0.0, 40.0), 0);
+        assert_eq!(super::scroll_steps(&mut s, Moved, -0.5, 40.0), 0, "a new gesture forgets the last one's leftover");
+        assert_eq!(super::scroll_steps(&mut s, Moved, -0.6, 40.0), -1);
+    }
 
     #[test]
     #[cfg(not(windows))]
