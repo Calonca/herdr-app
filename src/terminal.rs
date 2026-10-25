@@ -676,6 +676,9 @@ fn is_icon(text: &str) -> bool {
 /// which encodes it once, in the mode the program asked for (as Ghostty does).
 fn key_bytes(vt: &mut vt::Vt, k: &Keystroke) -> Option<Vec<u8>> {
     let m = k.modifiers;
+    if k.key == "enter" && vt.win32.on && (m.shift || m.control || m.alt) {
+        return Some(crate::win32_keys::enter(m.shift, m.control, m.alt));
+    }
     let Some((key, shifted, unshifted)) = map_key(&k.key) else {
         return k.key_char.as_ref().map(|text| text.as_bytes().to_vec());
     };
@@ -1311,5 +1314,22 @@ mod tests {
             }
         }
         assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
+    }
+
+    /// Windows' ConPTY drops Shift+Enter as Ghostty sends it; when the program
+    /// asks for win32-input-mode (even split across reads), Enter with a
+    /// modifier goes as a key event instead.
+    #[test]
+    fn enter_with_a_modifier_goes_as_a_windows_key_event_when_the_program_asks() {
+        let mut vt = Vt::new(20, 3);
+        let send = |vt: &mut Vt, spec| String::from_utf8(key_bytes(vt, &press(spec, None)).unwrap()).unwrap();
+        assert_eq!(send(&mut vt, "shift-enter"), "\x1b[27;2;13~");
+        vt.write(b"\x1b[?90");
+        vt.write(b"01h");
+        assert_eq!(send(&mut vt, "shift-enter"), "\x1b[13;28;13;1;16;1_\x1b[13;28;13;0;16;1_");
+        assert_eq!(send(&mut vt, "ctrl-enter"), "\x1b[13;28;10;1;8;1_\x1b[13;28;10;0;8;1_");
+        assert_eq!(send(&mut vt, "enter"), "\r");
+        vt.write(b"\x1b[?9001l");
+        assert_eq!(send(&mut vt, "shift-enter"), "\x1b[27;2;13~");
     }
 }

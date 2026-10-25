@@ -190,6 +190,8 @@ pub struct Vt {
     /// The cursor, the kitty images and the colors as last drawn: changes to
     /// them don't mark the render state dirty.
     drawn: (CursorKey, u64, u64),
+    /// Whether the program wants win32 key events (Ghostty doesn't track it).
+    pub win32: crate::win32_keys::Win32Input,
 }
 
 /// What of the cursor a frame shows: (on screen, x, y, visible, style).
@@ -319,6 +321,7 @@ impl Vt {
                 drag,
                 release,
                 drawn: Default::default(),
+                win32: Default::default(),
             };
             vt.apply_theme();
             vt
@@ -633,6 +636,7 @@ impl Vt {
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
+        self.win32.watch(bytes);
         unsafe { ghostty_terminal_vt_write(self.term, bytes.as_ptr(), bytes.len()) };
     }
 
