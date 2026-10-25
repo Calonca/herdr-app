@@ -515,9 +515,13 @@ impl AppWindow {
             }
         }));
         w._tasks.push(cx.spawn_in(window, async move |this, cx| {
+            // The terminals come from the core's events (a snapshot, then each
+            // change), not from listing them all every tick; machines, which
+            // send no events, are asked now and then.
             let mut subscription = None;
             let mut subscribed_generation = u64::MAX;
             let mut event_lines = crate::hc::EventLines::default();
+            let (mut tick, mut relist) = (0u64, false);
             loop {
                 let Ok((core, generation)) = this.update(cx, |this, _| {
                     (this.core.clone(), this.core_generation)
@@ -534,7 +538,11 @@ impl AppWindow {
                         });
                         (sub, result)
                     }).await;
-                    subscription = sub;
+                    subscription = sub.map(|(channel, events, snapshot)| {
+                        event_lines = crate::hc::EventLines::new(&snapshot);
+                        (channel, events)
+                    });
+                    (tick, relist) = (0, true);
                     if this.update_in(cx, |this, window, cx| {
                         if generation != this.core_generation { return; }
                         this.documents.entry(String::new()).or_default().connection(true, None, None);
@@ -542,22 +550,33 @@ impl AppWindow {
                         this.sync(window, cx);
                     }).is_err() { break; }
                 }
+                let ask_machines = tick.is_multiple_of(5);
+                tick += 1;
+                let relisting = std::mem::take(&mut relist);
                 let (sub, machines, refresh, listed, lines) = cx.background_executor().spawn(async move {
-                    // Subscribe before reading. The local stream forwards remote doc events too.
-                    let fresh_subscription = subscription.is_none();
-                    if fresh_subscription { event_lines = crate::hc::EventLines::default(); }
-                    let sub = subscription.or_else(|| core.subscribe().ok());
-                    let mut refresh = fresh_subscription;
+                    // The local stream forwards remote doc events too.
+                    let mut sub = subscription;
+                    let (mut refresh, mut terminals) = (false, relisting);
+                    if sub.is_none() && let Ok((channel, events, snapshot)) = core.subscribe() {
+                        event_lines = crate::hc::EventLines::new(&snapshot);
+                        sub = Some((channel, events));
+                        (refresh, terminals) = (true, true);
+                    }
+                    let mut closed = false;
                     if let Some((channel, events)) = &sub {
                         while let Ok(event) = events.try_recv() {
                             if let crate::hc::Stream::Data(bytes) = event {
-                                refresh |= event_lines.push(&bytes);
+                                let pushed = event_lines.push(&bytes);
+                                refresh |= pushed.docs;
+                                terminals |= pushed.terminals;
                                 core.credit(*channel, bytes.len());
-                            } else { refresh = true; }
+                            } else { (refresh, closed) = (true, true); }
                         }
                     }
-                    let machines = core.call("machine.list", json!({})).ok();
-                    let listed = core.call("terminal.list", json!({"all":false}));
+                    // A stream that ended is subscribed to again, with a fresh snapshot.
+                    if closed { sub = None; }
+                    let machines = if ask_machines || terminals { core.call("machine.list", json!({})).ok() } else { None };
+                    let listed = terminals.then(|| event_lines.live());
                     (sub, machines, refresh, listed, event_lines)
                 }).await;
                 let watching = sub.is_some();
@@ -568,7 +587,10 @@ impl AppWindow {
                     this.documents_watching = watching;
                     if watching { this.documents.entry(String::new()).or_default().connection(true, None, None); }
                     let changed = this.documents_updated(machines, vec![], window, cx);
-                    if let Ok(v) = listed { this.terminals_listed(v, window, cx); }
+                    match listed {
+                        Some(v) => this.terminals_listed(v, window, cx),
+                        None => this.tend_terminals(false, window, cx),
+                    }
                     if changed { this.sync(window, cx); }
                     this.flush_documents(refresh, window, cx);
                 }).is_err() { break; }
@@ -1581,6 +1603,12 @@ impl AppWindow {
     fn documents_updated(&mut self, machines: Option<Value>, results: Vec<(String, crate::mirror_sync::Outcome)>, window: &mut Window, cx: &mut Context<Self>) -> bool {
         use crate::mirror_sync::Outcome;
         let mut changed = false;
+        // The listing every 500 ms brings the machines alone: redraw only when
+        // one's state moved, or the whole window draws twice a second for nothing.
+        let shown = |d: &std::collections::BTreeMap<String, crate::mirror_sync::Slot>| {
+            d.iter().map(|(m, s)| (m.clone(), s.connected, s.available, s.blocked, s.error.clone(), s.layout())).collect::<Vec<_>>()
+        };
+        let (listing, was) = (results.is_empty(), shown(&self.documents));
         for (machine, result) in results {
             let Some(slot) = self.documents.get_mut(&machine) else { continue };
             let first = slot.document.is_none();
@@ -1654,8 +1682,10 @@ impl AppWindow {
             self.model.spaces.retain(|s| s.machine.as_deref().is_none_or(|m| states.contains_key(m)));
             changed |= before != self.model.spaces.len();
         }
-        self.publish(cx);
-        cx.notify();
+        if !listing || changed || shown(&self.documents) != was {
+            self.publish(cx);
+            cx.notify();
+        }
         changed
     }
 
@@ -1681,11 +1711,28 @@ impl AppWindow {
             obj.insert("status".into(), word);
             obj.insert("program".into(), program_of(&report, running_argv(obj)));
             obj.insert("report".into(), report);
+            // As the panes show it: a spinning title would change every listing.
+            if let Some(title) = obj.get("title").and_then(Value::as_str).map(|t| crate::terminal::shown_title(t).to_owned()) {
+                obj.insert("title".into(), title.into());
+            }
             if let Some(a) = obj.get("address").and_then(Value::as_str) {
                 live.insert(a.to_owned(), Value::Object(obj.clone()));
             }
         }
         self.live = live;
+        // A new sub-agent changes only this list; mods that show teams need to redraw.
+        let terminals_changed = mods::publish_terminals(list);
+        self.tend_terminals(true, window, cx);
+        if terminals_changed {
+            self.refresh_mods(cx);
+        }
+    }
+
+    /// Every tick, with or without news from the core: where the terminals go
+    /// (a layout that arrived late can place one now), what they mean now (a
+    /// finished agent you're looking at is no longer news), their folders, their
+    /// streams. `listed`: the list itself changed.
+    fn tend_terminals(&mut self, listed: bool, window: &mut Window, cx: &mut Context<Self>) {
         // Place newly labeled terminals first: one that is blocked on its first
         // listing is ours, and must ring.
         let mut changed = self.reconcile(window, cx);
@@ -1716,15 +1763,10 @@ impl AppWindow {
             self.tell_term(&t.view, &t.address, cx);
         }
         self.listed_once = true;
-        // A new sub-agent changes only this list; mods that show teams need to redraw.
-        let terminals_changed = mods::publish_terminals(list);
         if changed {
             self.sync(window, cx);
-        } else {
+        } else if listed {
             self.publish(cx);
-        }
-        if terminals_changed {
-            self.refresh_mods(cx);
         }
     }
 
@@ -3556,7 +3598,10 @@ impl AppWindow {
                 })
                 // Popups size to their content, up to the window: a column, so a mod
                 // root with `min_h(0)` can shrink and scroll. Layout mods fill their block.
-                .map(|d| if in_overlay { d.h_auto().min_h_0().flex().flex_col().child(root.clone()) } else { d.child(cached(root)) })
+                // Not cached here: ShellRoot caches the mod's view itself and draws its
+                // spinners over it, waking only itself (GPUI rebuilds all under a cached
+                // view that changed, so a spinner step would rebuild the mod).
+                .map(|d| if in_overlay { d.h_auto().min_h_0().flex().flex_col().child(root.clone()) } else { d.child(root.clone()) })
                 .into_any_element(),
             Some(Copy { error, inst, .. }) => div()
                 .id(SharedString::from(format!("err-{slot}")))
