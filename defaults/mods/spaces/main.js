@@ -1,8 +1,7 @@
 // Workspace spaces: stable colored avatars, worktrees under their checkout,
-// grouped by machine when more than one is known. After a space's name, dim, the
-// repo its first terminal is in now: branch, ahead/behind, * for uncommitted
-// changes. On the right, only what needs you: Needs you (blocked) or a dot
-// (an agent finished while you weren't looking); a working agent says nothing. Click to switch, right-click for its menu, drag to reorder.
+// grouped by machine when more than one is known. After a space's name, the repo
+// its first terminal is in now, only where unusual: branch, ahead/behind. Agent state lives in the agents list, not here. Click to
+// switch, right-click for its menu, drag to reorder.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
@@ -36,7 +35,7 @@ export function tone(t, status) {
 
 export default class Spaces extends View {
   init(_props, cx) {
-    this.git = {}; // where() -> { name, branch, ahead, behind, dirty, repo, linked }, null: not a repo
+    this.git = {}; // where() -> { name, branch, ahead, behind, repo, linked }, null: not a repo
     this.checked = {}; // where() -> when it was last looked at
     this.unsure = new Set(); // where()s git couldn't answer for (a machine away)
     this.pending = new Set(); // where()s to look at next
@@ -133,7 +132,7 @@ export default class Spaces extends View {
     });
   }
 
-  // One place's git: branch, ahead/behind, uncommitted changes, its repo.
+  // One place's git: branch, ahead/behind, its repo.
   async check(key, cx) {
     const [on, cwd] = JSON.parse(key);
     this.checked[key] = Date.now();
@@ -152,14 +151,14 @@ export default class Spaces extends View {
       const common = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, on });
       const repo = common.stdout.trim();
       const name = repo.endsWith("/.git") ? base(repo.slice(0, -5)) : base(repo).replace(/\.git$/, "");
-      const info = { name, branch: null, ahead: 0, behind: 0, dirty: false, repo: JSON.stringify([on, repo]), linked: repo !== `${top.stdout.trim()}/.git` };
+      const info = { name, branch: null, ahead: 0, behind: 0, repo: JSON.stringify([on, repo]), linked: repo !== `${top.stdout.trim()}/.git` };
       for (const line of r.stdout.split("\n")) {
         if (line.startsWith("# branch.head ")) info.branch = line.slice(14);
         else if (line.startsWith("# branch.ab ")) {
           const [a, b] = line.slice(12).split(" ");
           info.ahead = Math.abs(parseInt(a, 10)) || 0;
           info.behind = Math.abs(parseInt(b, 10)) || 0;
-        } else if (line && !line.startsWith("#")) info.dirty = true;
+        }
       }
       this.git[key] = info;
       if (!on) this.watch(repo, cx);
@@ -250,12 +249,15 @@ export default class Spaces extends View {
     });
   }
 
-  // Where the space is, dim after its name: "herdr \u00b7 main \u21912 \u21931 \u25cf". The repo
-  // or branch goes when the name already says it (a worktree is named after its branch).
+  // Only what's unusual, after the name: "herdr \u00b7 spike \u21912 \u21931". The repo or
+  // branch goes when the name already says it (a worktree is named after its branch),
+  // and master/main go: nearly every space is on one.
   gitTail(g, tree, name, t) {
-    const branch = g.branch ?? "detached";
+    const raw = g.branch ?? "detached";
     const same = (a) => a.toLowerCase() === name.toLowerCase();
-    const where = tree ? (same(branch) ? "" : branch) : same(g.name) ? branch : `${g.name} \u00b7 ${branch}`;
+    const branch = same(raw) || raw === "master" || raw === "main" ? "" : raw;
+    const repo = tree || same(g.name) ? "" : g.name;
+    const where = [repo, branch].filter(Boolean).join(" \u00b7 ");
     return h_flex()
       .flex_1()
       .min_w(0)
@@ -265,9 +267,8 @@ export default class Spaces extends View {
       .text_size(11.5)
       .text_color(t.dim)
       .when(Boolean(where), (el) => el.child(div().min_w(0).truncate().child(where)))
-      .when(g.ahead > 0, (el) => el.child(div().flex_none().child(`\u2191${g.ahead}`)))
-      .when(g.behind > 0, (el) => el.child(div().flex_none().child(`\u2193${g.behind}`)))
-      .when(g.dirty, (el) => el.child(div().flex_none().ml(-3).child("*")));
+      .when(g.ahead > 0, (el) => el.child(div().flex_none().text_color(t.ansi2).child(`\u2191${g.ahead}`)))
+      .when(g.behind > 0, (el) => el.child(div().flex_none().text_color(t.ansi1).child(`\u2193${g.behind}`)));
   }
 
   row({ w, i, g, tree }, t) {
@@ -305,9 +306,7 @@ export default class Spaces extends View {
           .when(Boolean(tree), el => el.pl(22).child(svg("mods/workspace-chrome/branch.svg").size(13).text_color(t.dim)))
           .when(!tree, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child(w.name[0]?.toUpperCase() ?? "?")))
           .child(div().flex_shrink(0).max_w(150).truncate().text_color(t.foreground).child(w.name))
-          .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1())
-          .when(w.status === "blocked", el => el.child(div().flex_none().px(6).h(18).rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).flex().items_center().child("Needs you")))
-          .when(w.status === "done", el => el.child(div().flex_none().size(6).rounded(3).bg(t.done))),
+          .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1()),
       );
   }
 
