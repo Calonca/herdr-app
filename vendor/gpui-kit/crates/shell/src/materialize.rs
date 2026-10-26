@@ -136,6 +136,7 @@ use gpui_base::{
 };
 
 mod components;
+mod size_observer;
 mod text_view;
 
 use crate::{
@@ -2161,29 +2162,6 @@ fn flex_element(
     let stateful = components::dock::with_commands(stateful, &behavior, runtime, cx);
     let stateful = with_aria(stateful, &behavior);
     let mut stateful = with_active_and_focus(stateful, &states);
-    if let Some(callback) = behavior.on_size_change {
-        let runtime = Rc::downgrade(runtime);
-        stateful = stateful.on_prepaint(move |bounds, window, cx| {
-            let changed = window.with_global_id("shell-size-change".into(), |id, window| {
-                window.with_element_state(id, |previous: Option<gpui::Size<Pixels>>, _| {
-                    (previous != Some(bounds.size), bounds.size)
-                })
-            });
-            if changed {
-                // Notify only after layout/paint, so handlers can safely update their view.
-                window.defer(cx, move |window, cx| {
-                    let Some(runtime) = runtime.upgrade() else { return };
-                    let size = crate::ComponentDataValue::Object(vec![
-                        ("width".into(), crate::ComponentDataValue::Number(f32::from(bounds.size.width) as f64)),
-                        ("height".into(), crate::ComponentDataValue::Number(f32::from(bounds.size.height) as f64)),
-                    ]);
-                    if let Err(error) = runtime.dispatch_component_event_data(callback, &[size], window, cx) {
-                        tracing::error!("error in size-change handler: {error}");
-                    }
-                });
-            }
-        });
-    }
     if !behavior.disabled
         && let Some(callback) = behavior.on_click
     {
@@ -2210,21 +2188,22 @@ fn flex_element(
         let mut stateful = stateful;
         stateful.style().refine(&refinement);
         stateful.extend(children);
-        return match (scroll_x, scroll_y) {
+        let element = match (scroll_x, scroll_y) {
             (true, true) => Scrollable::new(stateful, ScrollbarAxis::Both)
-                .id(identity)
+                .id(identity.clone())
                 .mode(behavior.scrollbar_mode)
                 .into_any_element(),
             (true, false) => Scrollable::new(stateful, ScrollbarAxis::Horizontal)
-                .id(identity)
+                .id(identity.clone())
                 .mode(behavior.scrollbar_mode)
                 .into_any_element(),
             (false, true) => Scrollable::new(stateful, ScrollbarAxis::Vertical)
-                .id(identity)
+                .id(identity.clone())
                 .mode(behavior.scrollbar_mode)
                 .into_any_element(),
             (false, false) => stateful.into_any_element(),
         };
+        return size_observer::observe(element, identity, behavior.on_size_change, runtime);
     }
     // The scroll position lives in window element state under this element's
     // own identity, which is the slot an explicit `Scrollbar` elsewhere in the
@@ -2246,7 +2225,7 @@ fn flex_element(
         }
         (false, false) => stateful,
     };
-    finish(stateful, refinement, children)
+    size_observer::observe(finish(stateful, refinement, children), identity, behavior.on_size_change, runtime)
 }
 
 /// Whether a hover transition from this snapshot still describes the pointer.

@@ -1792,7 +1792,7 @@ const ELEMENT_METHODS: &str = r#"    /**
      */
     on_resize<Self extends Element>(this: Self, handler: (sizes: number[], cx: Context) => void): Self;
     /**
-     * The resolved size of a div(), h_flex() or v_flex(), in logical pixels.
+     * The resolved outer size of a div(), h_flex() or v_flex(), in logical pixels.
      * Runs after the first layout and whenever width or height changes;
      * unchanged repaints and position-only changes do not call the handler.
      * Delivered after the frame, so cx.notify() and starting work are safe.

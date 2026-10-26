@@ -267,7 +267,7 @@ export default class Preview extends View {
         cx.notify();
       });
     return observe(v_flex(), "vertical")
-      .child(observe(h_flex(), "horizontal").child(observe(div(), "plain")));
+      .child(observe(h_flex(), "horizontal").child(observe(div(), "plain").border(3).p(7)));
   }
 }
 "#).unwrap();
