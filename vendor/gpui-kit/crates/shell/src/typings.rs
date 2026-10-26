@@ -1792,6 +1792,13 @@ const ELEMENT_METHODS: &str = r#"    /**
      */
     on_resize<Self extends Element>(this: Self, handler: (sizes: number[], cx: Context) => void): Self;
     /**
+     * The resolved size of a div(), h_flex() or v_flex(), in logical pixels.
+     * Runs after the first layout and whenever width or height changes;
+     * unchanged repaints and position-only changes do not call the handler.
+     * Delivered after the frame, so cx.notify() and starting work are safe.
+     */
+    on_size_change<Self extends Element>(this: Self, handler: (size: Size, cx: Context) => void): Self;
+    /**
      * The orientation a `RadioGroup` or `ToggleGroup` announces.
      *
      * Semantic only: it does **not** lay the group out. A group is a plain
@@ -4016,6 +4023,7 @@ mod tests {
         "viewport_from_layout",
         "size_range",
         "on_resize",
+        "on_size_change",
         "set_position",
         "pressed",
         "start",

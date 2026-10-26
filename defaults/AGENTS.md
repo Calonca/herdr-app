@@ -683,6 +683,8 @@ Chained builders with GPUI's snake_case names: `div()`, `h_flex()`,
 in init, `.track_focus(this.h).on_key_down((e, cx) => …)`, `this.h.focus()`.
 `.on_hover((hovered, cx) => …)` reports pointer entry and exit on buttons
 and other interactive controls too.
+On `div()` / `h_flex()` / `v_flex()`, `.on_size_change(({ width, height }, cx) => …)`
+reports the initial size and later resizes in logical pixels, after layout.
 `.when(cond, (el) => …)`, `.children([...])`. Controls from `gpui-base`
 (`Button`, `Checkbox`, `Switch`, `InputState` + `Input`) are unstyled: style
 them. Text: `TextView.markdown(id, text)` renders markdown; `EditorState.new({

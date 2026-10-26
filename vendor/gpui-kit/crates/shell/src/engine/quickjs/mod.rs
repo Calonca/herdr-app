@@ -7150,6 +7150,7 @@ impl ShellRuntime {
                 "viewport_from_layout",
                 "controls_right",
                 "on_resize",
+                "on_size_change",
                 "set_position",
                 "pressed",
                 "start",
@@ -8098,6 +8099,7 @@ impl ShellRuntime {
             "on_click"
             | "on_link_click"
             | "on_resize"
+            | "on_size_change"
             | "on_change"
             | "token"
             | "on_token_click"
@@ -10092,6 +10094,7 @@ fn callback_op_name(method: &str) -> Option<&'static str> {
         "on_item_click" => "on_item_click",
         "on_item_secondary_click" => "on_item_secondary_click",
         "on_resize" => "on_resize",
+        "on_size_change" => "on_size_change",
         "tab_bar" => "tab_bar",
         "empty_group" => "empty_group",
         "drop_indicator" => "drop_indicator",

@@ -442,6 +442,7 @@ struct Behavior {
     visible: Option<bool>,
     /// Reports the panel sizes of a resizable group once a drag has ended.
     on_resize: Option<CallbackId>,
+    on_size_change: Option<CallbackId>,
     /// Reports which item of a `VirtualList` was clicked.
     ///
     /// One handler for the whole list rather than one per row, and that is a
@@ -2129,6 +2130,7 @@ fn flex_element(
         && !behavior.needs_identity()
         && behavior.on_click.is_none()
         && behavior.on_mouse_move.is_none()
+        && behavior.on_size_change.is_none()
         && behavior.on_hover.is_none()
         && behavior.on_key_down.is_none()
         && behavior.on_key_up.is_none()
@@ -2159,6 +2161,29 @@ fn flex_element(
     let stateful = components::dock::with_commands(stateful, &behavior, runtime, cx);
     let stateful = with_aria(stateful, &behavior);
     let mut stateful = with_active_and_focus(stateful, &states);
+    if let Some(callback) = behavior.on_size_change {
+        let runtime = Rc::downgrade(runtime);
+        stateful = stateful.on_prepaint(move |bounds, window, cx| {
+            let changed = window.with_global_id("shell-size-change".into(), |id, window| {
+                window.with_element_state(id, |previous: Option<gpui::Size<Pixels>>, _| {
+                    (previous != Some(bounds.size), bounds.size)
+                })
+            });
+            if changed {
+                // Notify only after layout/paint, so handlers can safely update their view.
+                window.defer(cx, move |window, cx| {
+                    let Some(runtime) = runtime.upgrade() else { return };
+                    let size = crate::ComponentDataValue::Object(vec![
+                        ("width".into(), crate::ComponentDataValue::Number(f32::from(bounds.size.width) as f64)),
+                        ("height".into(), crate::ComponentDataValue::Number(f32::from(bounds.size.height) as f64)),
+                    ]);
+                    if let Err(error) = runtime.dispatch_component_event_data(callback, &[size], window, cx) {
+                        tracing::error!("error in size-change handler: {error}");
+                    }
+                });
+            }
+        });
+    }
     if !behavior.disabled
         && let Some(callback) = behavior.on_click
     {
@@ -2628,6 +2653,7 @@ pub(in crate::materialize) fn resolve_ops(
                 "on_mouse_down_out" => behavior.on_mouse_down_out = Some(*id),
                 "on_scroll_wheel" => behavior.on_scroll_wheel = Some(*id),
                 "on_resize" => behavior.on_resize = Some(*id),
+                "on_size_change" => behavior.on_size_change = Some(*id),
                 "on_change" => behavior.on_change = Some(*id),
                 "token" => behavior.token = Some(*id),
                 "on_token_click" => behavior.on_token_click = Some(*id),

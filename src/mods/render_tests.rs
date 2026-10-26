@@ -1,4 +1,4 @@
-//! Initial descriptions only: real shipped JS and GPUI entities, no native materialization.
+//! Shipped mod descriptions and native mod behavior regressions.
 use super::*;
 use gpui::TestAppContext;
 use gpui_shell::{ShellRuntime, plugin::DescriptionSession, policy::Policy};
@@ -235,6 +235,82 @@ fn describe(
 
 fn props() -> Value {
     json!({"overlay":"o1","pane":"p1","terminal":"t1","space":"s1","tab":"pane","target":{"pane":"p1","terminal":"t1","id":"s1","space":"s1"},"title":"Fixture","value":"Name","message":"A prefilled message","command":{"name":"space.rename","args":{"id":"s1"}},"notification":{"title":"Finished","body":"Build done","action":{"name":"app.help"}},"action":"new"})
+}
+
+#[gpui::test]
+fn mod_size_changes_follow_layout_without_pointer_input(cx: &mut TestAppContext) {
+    use gpui::{ParentElement as _, Render, Styled as _, px};
+
+    struct Pane {
+        content: gpui::Entity<gpui_shell::root::ShellRoot>,
+        width: f32,
+        height: f32,
+        left: f32,
+    }
+    impl Render for Pane {
+        fn render(&mut self, _: &mut gpui::Window, _: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
+            gpui::div().w(px(self.width)).h(px(self.height)).ml(px(self.left)).child(self.content.clone())
+        }
+    }
+
+    cx.update(gpui_shell::init);
+    let staged = Staged::new();
+    std::fs::write(staged.0.join("main.js"), r#"
+import { View, div } from "gpui-kit";
+import { h_flex, v_flex } from "gpui-base";
+import { record } from "size-proof";
+export default class Preview extends View {
+  render() {
+    const observe = (element, name) => element.id(name).size_full()
+      .on_size_change(({ width, height }, cx) => {
+        record(name, width, height, cx.phase());
+        cx.notify();
+      });
+    return observe(v_flex(), "vertical")
+      .child(observe(h_flex(), "horizontal").child(observe(div(), "plain")));
+  }
+}
+"#).unwrap();
+    let sizes = Rc::new(RefCell::new(Vec::new()));
+    let received = sizes.clone();
+    gpui_shell::policy::set_default(Policy::new()
+        .with_capabilities(Capabilities::new().read_roots([staged.0.clone()]))
+        .with_host_module(HostModule::new("size-proof").function("record", move |args| {
+            received.borrow_mut().push((args.string(0)?.to_owned(), args.number(1)?, args.number(2)?, args.string(3)?.to_owned()));
+            Ok(HostValue::Null)
+        })).unwrap());
+    let runtime = ShellRuntime::new_isolated().unwrap();
+    let window = cx.add_window(|window, cx| Pane {
+        content: runtime.try_load(&staged.0, window, cx).unwrap(),
+        width: 320., height: 180., left: 0.,
+    });
+    let mut context = gpui::VisualTestContext::from_window(window.into(), cx);
+    let draw = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    };
+    for (width, height) in [(320., 180.), (500., 180.), (500., 260.)] {
+        window.update(cx, |pane, _, cx| {
+            pane.width = width;
+            pane.height = height;
+            cx.notify();
+        }).unwrap();
+        draw(&mut context);
+        let count = sizes.borrow().len();
+        draw(&mut context); // The callback's cx.notify() rebuilds the script at the same size.
+        draw(&mut context);
+        assert_eq!(sizes.borrow().len(), count, "unchanged redraws must stay silent");
+    }
+    for name in ["vertical", "horizontal", "plain"] {
+        let observed: Vec<_> = sizes.borrow().iter().filter(|entry| entry.0 == name)
+            .map(|entry| (entry.1, entry.2)).collect();
+        assert_eq!(observed, [(320., 180.), (500., 180.), (500., 260.)], "{name}");
+    }
+    assert!(sizes.borrow().iter().all(|entry| entry.3 == "event"), "handlers must run outside layout");
+    window.update(cx, |pane, _, cx| { pane.left = 20.; cx.notify(); }).unwrap();
+    draw(&mut context);
+    assert_eq!(sizes.borrow().len(), 9, "moving without resizing must stay silent");
+    window.update(cx, |_, window, _| window.remove_window()).unwrap();
+    gpui_shell::policy::set_default(Policy::new());
 }
 
 #[gpui::test]
