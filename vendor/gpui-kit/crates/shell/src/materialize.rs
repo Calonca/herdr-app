@@ -1451,8 +1451,9 @@ fn materialize_component(
             if let Some(ms) = behavior.spin {
                 let turn = (loop_clock_ms() % ms) / ms;
                 image = image.with_transformation(gpui::Transformation::rotate(gpui::radians((turn * std::f64::consts::TAU) as f32)));
-                // ~10 fps: a small spinner looks the same, and each step redraws its whole view.
-                wake_view_after(Duration::from_millis(100), window, cx);
+                if !checking() {
+                    window.request_animation_frame();
+                }
             }
             image.into_any_element()
         }
@@ -2762,8 +2763,7 @@ thread_local! {
 // turned, on top of its cached content, and wakes only itself. A step then
 // redraws ShellRoot's thin layers instead of rebuilding the whole view: GPUI
 // rebuilds everything under a cached view that changed, so a spinner that
-// woke its view cost the view's whole materialize, layout and paint 10 times
-// a second.
+// woke its view cost the view's whole materialize, layout and paint per step.
 // Painted above the whole view, a spinner would show through anything in the
 // view drawn over it, and keeps only the opacity it was built with: a view with
 // a popover, a select or the like, opacity that changes on hover, press or
@@ -2887,7 +2887,7 @@ pub(crate) fn spin_layer(view: gpui::EntityId) -> AnyElement {
                     let _ = window.paint_svg(s.bounds, s.path, None, matrix, s.color, cx);
                 });
             }
-            wake_view_after(Duration::from_millis(100), window, cx);
+            window.request_animation_frame();
         },
     )
     .absolute()

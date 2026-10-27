@@ -32,6 +32,50 @@ impl Render for Mounted {
 }
 
 #[gpui::test]
+fn spinners_follow_native_frames_without_rerunning_scripts(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    gpui_shell::policy::set_default(Policy::new());
+    for inline in [false, true] {
+        let fixture = Fixture::new(&format!(r#"
+import {{ View, div, svg }} from "gpui-kit";
+export default class extends View {{
+  render() {{
+    return div().size_full(){}
+      .children([1, 2, 3].map(() => svg("ring.svg").size(12).spin(900)));
+  }}
+}}"#, if inline { ".hover(el => el.opacity(0.9))" } else { "" }));
+        std::fs::write(fixture.0.join("ring.svg"), r#"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"><path d="M6 1a5 5 0 0 1 5 5"/></svg>"#).unwrap();
+        let runtime = ShellRuntime::new_isolated().unwrap();
+        let window = cx.add_window(|window, cx| Mounted(runtime.try_load(&fixture.0, window, cx).unwrap()));
+        let mut visual = VisualTestContext::from_window(*window.deref(), cx);
+        // Settle the initial hosted/inline decision before counting frames.
+        for _ in 0..2 {
+            visual.update(|window, cx| { window.simulate_next_frame(cx); window.draw(cx).clear(cx); });
+            visual.run_until_parked();
+        }
+        let before = runtime.read_metrics();
+        for _ in 0..5 {
+            visual.update(|window, cx| {
+                assert!(window.simulate_next_frame(cx) > 0, "spinner must request the next native frame (inline: {inline})");
+                window.draw(cx).clear(cx);
+            });
+        }
+        let after = runtime.read_metrics();
+        assert_eq!(after.script_renders(), before.script_renders(), "animation must reuse the script snapshot");
+        if !inline {
+            assert_eq!(after.materializations(), before.materializations(), "hosted animation must reuse the native subtree");
+        }
+        visual.update(|window, cx| {
+            window.replace_root(cx, |_, _| Empty);
+            window.simulate_next_frame(cx);
+            window.draw(cx).clear(cx);
+            assert_eq!(window.simulate_next_frame(cx), 0, "removing the spinner must stop animation requests");
+            window.remove_window();
+        });
+    }
+}
+
+#[gpui::test]
 fn size_change_reports_initial_and_resized_layout_without_pointer_input(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let fixture = Fixture::new(r#"
