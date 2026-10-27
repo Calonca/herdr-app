@@ -27,7 +27,7 @@ def reference(agent, event, env):
 class RpcError(RuntimeError):
     def __init__(self, error):
         super().__init__(error.get("message", "the core rejected the reference"))
-        self.kind = error.get("kind")
+        self.kind = error.get("data", {}).get("kind")
 
 
 def save(value, terminal, env, hc="hc"):

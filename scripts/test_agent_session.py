@@ -39,6 +39,40 @@ class AgentSessionTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     agent_session.reference("codex", dict(event, **{field: value}), {})
 
+    def test_a_wire_conflict_rereads_the_version_before_saving(self):
+        server = '''
+import json, sys
+version = 1
+for line in sys.stdin:
+    request = json.loads(line)
+    method, params = request["method"], request["params"]
+    reply = {"jsonrpc": "2.0", "id": request["id"]}
+    if method == "terminal.get":
+        reply["result"] = {"address": "t1", "state": "live"}
+    elif method == "doc.get":
+        reply["result"] = {"version": version, "value": None}
+    elif method == "doc.set" and version == 1:
+        version = 2
+        reply["error"] = {"code": -32000, "message": "changed meanwhile", "data": {"kind": "conflict", "hint": "read and retry"}}
+    elif method == "doc.set" and params["version"] == 2:
+        open("saved", "w").write(json.dumps(params["value"]))
+        reply["result"] = {"version": 3}
+    else:
+        raise AssertionError("the stale document version was retried without a read")
+    print(json.dumps(reply), flush=True)
+'''
+        with tempfile.TemporaryDirectory(prefix="hc-cas-") as scratch:
+            root = Path(scratch)
+            (root / "connect").write_text(server, encoding="utf-8")
+            previous = Path.cwd()
+            try:
+                os.chdir(root)
+                value = {"agent": "codex", "session_id": "new-conversation", "cwd": scratch}
+                agent_session.save(value, "t1", dict(os.environ, HC_TERMINAL_SOCKET="test-only"), hc=sys.executable)
+                self.assertEqual(json.loads((root / "saved").read_text()), value)
+            finally:
+                os.chdir(previous)
+
 
 @unittest.skipUnless(os.environ.get("HC_AGENT_TEST_CORE"), "set HC_AGENT_TEST_CORE to an hc executable for real-PTY proof")
 class DurableSessionTest(unittest.TestCase):

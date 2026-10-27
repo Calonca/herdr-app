@@ -24,7 +24,7 @@ other hooks. For Codex, use `~/.codex/hooks.json`; for Claude Code, use
 On Windows, use the installed Python executable and quote paths in the command:
 
 ```json
-"command": "\"C:\\Python315\\python.exe\" \"C:\\path\\agent_session.py\" codex"
+"command": "py -3 \"C:\\path\\agent_session.py\" codex"
 ```
 
 The hook runs only inside a core terminal. It uses `HC_TERMINAL_SOCKET` to reach
