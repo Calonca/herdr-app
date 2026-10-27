@@ -19,6 +19,8 @@ prints the built-in command list even without an open window. Do not launch bare
 `herdr-app` to inspect it: that opens or raises the window. Do not stop,
 signal or restart the person's app or core. A window closing does not kill
 its terminals.
+Opening the app starts its local core when needed; reconnecting an open
+window waits for that core to be started again.
 
 ## Show something when asked
 

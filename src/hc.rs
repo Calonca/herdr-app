@@ -249,7 +249,20 @@ fn read_frame(r: &mut impl Read) -> Option<(u32, u8, Vec<u8>)> {
 }
 
 impl Core {
-    /// Connects to the user's core (starting it if needed) and switches to framed mode.
+    /// Starts the local core for an app launch, then connects to it.
+    pub fn start() -> Result<Arc<Core>> {
+        let status = crate::spawn::command(crate::core_bin::path())
+            .args(["server", "start"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .status()
+            .context("cannot start herdr-core")?;
+        if !status.success() { bail!("herdr-core did not start: {status}"); }
+        Self::connect()
+    }
+
+    /// Connects to the user's running core and switches to framed mode.
     pub fn connect() -> Result<Arc<Core>> {
         let mut child = crate::spawn::command(crate::core_bin::path())
             .arg("connect")

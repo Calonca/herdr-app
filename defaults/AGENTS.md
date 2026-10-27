@@ -23,6 +23,8 @@ from the same parts you have.
   (`hc --help`). The Herdr app is one client of it.
 
 `herdr-app` controls this app; `hc` controls herdr-core.
+Opening the app starts its local core when needed. If that core is stopped
+while the window stays open, start it with `hc server start` to reconnect.
 
 ## What you can and can't do
 

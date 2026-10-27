@@ -120,7 +120,7 @@ fn main() {
         None => Err(setup::Need::Install),
         Some(bin) => {
             core_bin::use_core(bin);
-            match hc::Core::connect() {
+            match hc::Core::start() {
                 // One that can't serve this app gets the screen that fixes it.
                 Ok(core) => hc::check(&core.hello).map(|()| core).map_err(setup::Need::Fix),
                 Err(e) => {
