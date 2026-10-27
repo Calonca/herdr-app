@@ -21,23 +21,21 @@ class AgentSessionTest(unittest.TestCase):
             "prompt": "private prompt", "unknown": "ignored",
         }
         for agent in ("codex", "claude"):
-            saved = agent_session.reference(agent, event, {})
+            saved = agent_session.reference(agent, event)
             self.assertEqual(saved["session_id"], "conversation-1")
             self.assertEqual(set(saved), {"agent", "session_id", "cwd"})
             for source in ("resume", "clear", "compact", "fork"):
-                changed = agent_session.reference(agent, dict(event, source=source, session_id="conversation-2"), {})
+                changed = agent_session.reference(agent, dict(event, source=source, session_id="conversation-2"))
                 self.assertEqual(changed["session_id"], "conversation-2")
-            self.assertIsNone(agent_session.reference(agent, dict(event, agent_id="child"), {}))
-            self.assertIsNone(agent_session.reference(agent, dict(event, hook_event_name="SubagentStart"), {}))
-        self.assertIsNone(agent_session.reference("codex", event, {"CODEX_THREAD_ID": "parent-conversation"}))
-        self.assertIsNotNone(agent_session.reference("codex", event, {"CODEX_THREAD_ID": "conversation-1"}))
+            self.assertIsNone(agent_session.reference(agent, dict(event, agent_id="child")))
+            self.assertIsNone(agent_session.reference(agent, dict(event, hook_event_name="SubagentStart")))
 
     def test_an_invalid_reference_fails_instead_of_overwriting_the_saved_identity(self):
         event = {"hook_event_name": "SessionStart", "session_id": "conversation", "cwd": "/work"}
         for field in ("session_id", "cwd"):
             for value in (None, "", 1, []):
                 with self.assertRaises(ValueError):
-                    agent_session.reference("codex", dict(event, **{field: value}), {})
+                    agent_session.reference("codex", dict(event, **{field: value}))
 
     def test_a_wire_conflict_rereads_and_keeps_both_overlapping_sessions(self):
         server = '''
@@ -89,6 +87,7 @@ class DurableSessionTest(unittest.TestCase):
                        XDG_CONFIG_HOME=str(root / "config"), XDG_RUNTIME_DIR=str(root / "run"))
             for key in ("HC_SOCKET", "HC_TERMINAL_ID", "HC_TERMINAL_SOCKET", "CODEX_THREAD_ID"):
                 env.pop(key, None)
+            env["CODEX_THREAD_ID"] = "an-inherited-parent-thread"
             helper = Path(agent_session.__file__).resolve()
             state = root / "state/herdr-core" / session
 

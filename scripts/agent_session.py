@@ -10,14 +10,12 @@ import threading
 import time
 
 
-def reference(agent, event, env):
+def reference(agent, event):
     if not isinstance(event, dict):
         raise ValueError("SessionStart must be a JSON object")
     if event.get("hook_event_name") != "SessionStart" or event.get("agent_id"):
         return None
     session = event.get("session_id")
-    if agent == "codex" and env.get("CODEX_THREAD_ID") not in (None, "", session):
-        return None
     for field in ("session_id", "cwd"):
         if not isinstance(event.get(field), str) or not event[field].strip():
             raise ValueError(f"SessionStart has no {field}")
@@ -103,7 +101,7 @@ def main():
         return 0
     try:
         event = json.load(sys.stdin.buffer)
-        value = reference(args.agent, event, os.environ)
+        value = reference(args.agent, event)
         if value is not None:
             save(value, os.environ["HC_TERMINAL_ID"], os.environ)
     except (OSError, ValueError, RuntimeError, KeyError) as error:
