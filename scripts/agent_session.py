@@ -100,7 +100,7 @@ def main():
     if not os.environ.get("HC_TERMINAL_ID") or not os.environ.get("HC_TERMINAL_SOCKET"):
         return 0
     try:
-        event = json.load(sys.stdin)
+        event = json.load(sys.stdin.buffer)
         value = reference(args.agent, event, os.environ)
         if value is not None:
             save(value, os.environ["HC_TERMINAL_ID"], os.environ)

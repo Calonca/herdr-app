@@ -51,7 +51,7 @@ is still eligible to run.
 Hook contracts: [Codex](https://learn.chatgpt.com/docs/hooks) and
 [Claude Code](https://code.claude.com/docs/en/hooks).
 
-Run the owning tests with `python3 -m unittest discover -s scripts -p test_agent_session.py`.
+Run the owning tests with `python3 -B -m unittest discover -s scripts -p test_agent_session.py`.
 Set `HC_AGENT_TEST_CORE` to an `hc` executable to also exercise real PTYs, full
 stop, simultaneous core/holder termination and a failed persistence write. These
 probes use their own temporary home and core session. No model requests are made.

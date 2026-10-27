@@ -69,19 +69,22 @@ class DurableSessionTest(unittest.TestCase):
 
             try:
                 cli("server", "start")
-                event = {"hook_event_name": "SessionStart", "session_id": "codex-conversation-1", "cwd": scratch,
+                cwd = root / "caf\u00e9"
+                cwd.mkdir()
+                event = {"hook_event_name": "SessionStart", "session_id": "codex-conversation-1", "cwd": str(cwd),
                          "source": "startup", "prompt": "never persist this prompt"}
                 code = (
-                    "import json,os,sys,time; "
-                    f"sys.path.insert(0,{str(helper.parent)!r}); import agent_session; "
+                    "import json,os,subprocess,sys,time; "
                     f"event={event!r}; "
-                    f"agent_session.save(agent_session.reference('codex',event,os.environ),os.environ['HC_TERMINAL_ID'],os.environ,hc={hc!r}); "
+                    f"subprocess.run([sys.executable,'-X','utf8=0','-B',{str(helper)!r},'codex'], "
+                    "input=json.dumps(event,ensure_ascii=False).encode('utf-8'), "
+                    f"env=dict(os.environ,PYTHONIOENCODING='cp1252',PATH={str(Path(hc).parent)!r}+os.pathsep+os.environ['PATH']),check=True); "
                     f"open({str(root / 'socket')!r},'w').write(os.environ['HC_TERMINAL_SOCKET']); "
                     "print('reference saved',flush=True); time.sleep(60)"
                 )
-                terminal = cli("run", "--bg", "--keep", sys.executable, "-c", code)["address"]
+                terminal = cli("run", "--bg", "--keep", "--cwd", str(cwd), sys.executable, "-B", "-c", code)["address"]
                 until(lambda: (root / "socket").exists())
-                expected = {"agent": "codex", "session_id": event["session_id"], "cwd": scratch}
+                expected = {"agent": "codex", "session_id": event["session_id"], "cwd": str(cwd)}
                 self.assertEqual(document()["value"], expected)
                 self.assertNotIn("never persist this prompt", (state / "docs.json").read_text())
                 hook_env = dict(env, HC_TERMINAL_ID=terminal,
