@@ -80,12 +80,13 @@ class DurableSessionTest(unittest.TestCase):
         hc = os.environ["HC_AGENT_TEST_CORE"]
         with tempfile.TemporaryDirectory(prefix="hc-as-", dir=None if os.name == "nt" else "/var/tmp") as scratch:
             root = Path(scratch)
-            env = dict(os.environ, HC_SESSION="test", XDG_STATE_HOME=str(root / "state"),
+            session = root.name
+            env = dict(os.environ, HC_SESSION=session, XDG_STATE_HOME=str(root / "state"),
                        XDG_CONFIG_HOME=str(root / "config"), XDG_RUNTIME_DIR=str(root / "run"))
             for key in ("HC_SOCKET", "HC_TERMINAL_ID", "HC_TERMINAL_SOCKET", "CODEX_THREAD_ID"):
                 env.pop(key, None)
             helper = Path(agent_session.__file__).resolve()
-            state = root / "state/herdr-core/test"
+            state = root / "state/herdr-core" / session
 
             def cli(*args):
                 out = subprocess.run([hc, "--json", *args], env=env, capture_output=True, text=True, timeout=15)
