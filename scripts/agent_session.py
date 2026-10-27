@@ -75,10 +75,12 @@ def save(value, terminal, env, hc="hc"):
             name = "herdr-agent-" + terminal
             while time.monotonic() < deadline:
                 current = call("doc.get", {"name": name})
-                if current["value"] == value:
+                document = current["value"] if current["value"] is not None else {"references": []}
+                if value in document["references"]:
                     return
+                document["references"].append(value)
                 try:
-                    call("doc.set", {"name": name, "version": current["version"], "value": value})
+                    call("doc.set", {"name": name, "version": current["version"], "value": document})
                     return
                 except RpcError as error:
                     if error.kind != "conflict":

@@ -39,10 +39,11 @@ class AgentSessionTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     agent_session.reference("codex", dict(event, **{field: value}), {})
 
-    def test_a_wire_conflict_rereads_the_version_before_saving(self):
+    def test_a_wire_conflict_rereads_and_keeps_both_overlapping_sessions(self):
         server = '''
 import json, sys
 version = 1
+newer = __NEWER__
 for line in sys.stdin:
     request = json.loads(line)
     method, params = request["method"], request["params"]
@@ -50,7 +51,7 @@ for line in sys.stdin:
     if method == "terminal.get":
         reply["result"] = {"address": "t1", "state": "live"}
     elif method == "doc.get":
-        reply["result"] = {"version": version, "value": None}
+        reply["result"] = {"version": version, "value": {"references": [newer]} if version == 2 and newer else None}
     elif method == "doc.set" and version == 1:
         version = 2
         reply["error"] = {"code": -32000, "message": "changed meanwhile", "data": {"kind": "conflict", "hint": "read and retry"}}
@@ -61,17 +62,20 @@ for line in sys.stdin:
         raise AssertionError("the stale document version was retried without a read")
     print(json.dumps(reply), flush=True)
 '''
-        with tempfile.TemporaryDirectory(prefix="hc-cas-") as scratch:
-            root = Path(scratch)
-            (root / "connect").write_text(server, encoding="utf-8")
-            previous = Path.cwd()
-            try:
-                os.chdir(root)
-                value = {"agent": "codex", "session_id": "new-conversation", "cwd": scratch}
-                agent_session.save(value, "t1", dict(os.environ, HC_TERMINAL_SOCKET="test-only"), hc=sys.executable)
-                self.assertEqual(json.loads((root / "saved").read_text()), value)
-            finally:
-                os.chdir(previous)
+        for newer in (None, {"agent": "claude", "session_id": "after-clear", "cwd": "/work"}):
+            with self.subTest(newer=newer), tempfile.TemporaryDirectory(prefix="hc-cas-") as scratch:
+                root = Path(scratch)
+                (root / "connect").write_text(server.replace("__NEWER__", repr(newer)), encoding="utf-8")
+                previous = Path.cwd()
+                try:
+                    os.chdir(root)
+                    value = {"agent": "claude", "session_id": "before-clear", "cwd": scratch}
+                    agent_session.save(value, "t1", dict(os.environ, HC_TERMINAL_SOCKET="test-only"), hc=sys.executable)
+                    self.assertEqual(json.loads((root / "saved").read_text())["references"],
+                                     [value] if newer is None else [newer, value],
+                                     "a late hook must add its reference without erasing another session")
+                finally:
+                    os.chdir(previous)
 
 
 @unittest.skipUnless(os.environ.get("HC_AGENT_TEST_CORE"), "set HC_AGENT_TEST_CORE to an hc executable for real-PTY proof")
@@ -120,7 +124,7 @@ class DurableSessionTest(unittest.TestCase):
                 terminal = cli("run", "--bg", "--keep", "--cwd", str(cwd), sys.executable, "-B", "-c", code)["address"]
                 until(lambda: (root / "socket").exists())
                 expected = {"agent": "codex", "session_id": event["session_id"], "cwd": str(cwd)}
-                self.assertEqual(document()["value"], expected)
+                self.assertEqual(document()["value"], {"references": [expected]})
                 self.assertNotIn("never persist this prompt", (state / "docs.json").read_text())
                 hook_env = dict(env, HC_TERMINAL_ID=terminal,
                                 HC_TERMINAL_SOCKET=(root / "socket").read_text())
@@ -131,19 +135,19 @@ class DurableSessionTest(unittest.TestCase):
                 cli("server", "stop")
                 cli("server", "start")
                 until(lambda: cli("get", terminal)["pid"] is not None)
-                self.assertEqual(document()["value"], expected)
+                self.assertEqual(document()["value"], {"references": [expected]})
                 before = cli("get", terminal)["pid"]
                 status = cli("server", "status")
                 for pid in (status["pid"], status["holder"]["pid"]):
                     os.kill(pid, signal.SIGTERM if os.name == "nt" else signal.SIGKILL)
                 until(lambda: cli("server", "start")["pid"] != status["pid"])
                 until(lambda: cli("get", terminal)["pid"] not in (None, before))
-                self.assertEqual(document()["value"], expected)
+                self.assertEqual(document()["value"], {"references": [expected]})
                 (state / "docs.tmp").mkdir()
                 with self.assertRaises(agent_session.RpcError):
                     agent_session.save(dict(expected, session_id="claude-conversation-2", agent="claude"),
                                        terminal, hook_env, hc=hc)
-                self.assertEqual(document()["value"], expected, "a failed write keeps the acknowledged reference")
+                self.assertEqual(document()["value"], {"references": [expected]}, "a failed write keeps the acknowledged reference")
                 (state / "docs.tmp").rmdir()
             finally:
                 subprocess.run([hc, "server", "stop"], env=env, capture_output=True, timeout=15)
