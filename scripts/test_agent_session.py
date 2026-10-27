@@ -37,6 +37,17 @@ class AgentSessionTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     agent_session.reference("codex", dict(event, **{field: value}))
 
+    def test_pi_preserves_its_explicit_session_file_without_copying_session_contents(self):
+        event = {"session_id": "pi-conversation", "session_file": "/sessions/caf\u00e9.jsonl", "cwd": "/work",
+                 "messages": ["private conversation"], "unknown": "ignored"}
+        self.assertEqual(agent_session.reference("pi", event), {
+            "agent": "pi", "session_id": "pi-conversation", "session_file": "/sessions/caf\u00e9.jsonl", "cwd": "/work",
+        })
+        for field in ("session_id", "session_file", "cwd"):
+            for value in (None, "", 1):
+                with self.assertRaises(ValueError):
+                    agent_session.reference("pi", dict(event, **{field: value}))
+
     def test_a_wire_conflict_rereads_and_keeps_both_overlapping_sessions(self):
         server = '''
 import json, sys

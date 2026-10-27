@@ -118,7 +118,7 @@ When developing the app on Linux, its `scripts/sandbox` provides an isolated
 home, core and display: `up`, `do`, `status`, `shot`, then `down` when done.
 Never stop a server or session you didn't start.
 
-Optional conversation capture: the repository's `scripts/agent_session.py`
-SessionStart hook saves Codex/Claude conversation IDs through the terminal's own
-core. It requires Python 3 and manual hook installation; the desktop binary does
-not install it or automatically resume agents. See `docs/agent-sessions.md`.
+Optional identity capture: `scripts/agent_session.py` saves Claude/Codex
+SessionStart IDs; `scripts/pi_session.ts` reports Pi's native session ID and
+file through the same helper. They require Python 3 and manual installation,
+report no status, and do not resume agents. See `docs/agent-sessions.md`.

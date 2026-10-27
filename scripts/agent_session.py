@@ -1,4 +1,4 @@
-"""Save Codex/Claude SessionStart references on the terminal's own herdr-core."""
+"""Save explicit Codex, Claude and Pi session references on the terminal's own herdr-core."""
 
 import argparse
 import json
@@ -12,14 +12,14 @@ import time
 
 def reference(agent, event):
     if not isinstance(event, dict):
-        raise ValueError("SessionStart must be a JSON object")
-    if event.get("hook_event_name") != "SessionStart" or event.get("agent_id"):
+        raise ValueError("session metadata must be a JSON object")
+    if agent != "pi" and (event.get("hook_event_name") != "SessionStart" or event.get("agent_id")):
         return None
-    session = event.get("session_id")
-    for field in ("session_id", "cwd"):
+    fields = ("session_id", "cwd", "session_file") if agent == "pi" else ("session_id", "cwd")
+    for field in fields:
         if not isinstance(event.get(field), str) or not event[field].strip():
-            raise ValueError(f"SessionStart has no {field}")
-    return {"agent": agent, "session_id": session, "cwd": event["cwd"]}
+            raise ValueError(f"session metadata has no {field}")
+    return {"agent": agent, **{field: event[field] for field in fields}}
 
 
 class RpcError(RuntimeError):
@@ -95,7 +95,7 @@ def save(value, terminal, env, hc="hc"):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("agent", choices=("codex", "claude"))
+    parser.add_argument("agent", choices=("codex", "claude", "pi"))
     args = parser.parse_args()
     if not os.environ.get("HC_TERMINAL_ID") or not os.environ.get("HC_TERMINAL_SOCKET"):
         return 0

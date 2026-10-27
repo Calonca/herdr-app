@@ -123,9 +123,10 @@ machine first, then machines by name; `space.move` stays inside its machine's bl
   terminal (core crash, reboot, logout) gets a shell in its last folder,
   with the same address; its original command is never run again. Splits
   and mod panes stay. An exited or killed terminal is closed, not restarted.
-  The repository's optional `scripts/agent_session.py` SessionStart hook can save
-  Codex/Claude conversation IDs on that terminal's core. It requires Python 3
-  and manual installation (`docs/agent-sessions.md`); it does not resume agents.
+  Optional repository integrations save Claude/Codex SessionStart IDs and Pi's
+  native session ID/file on that terminal's core. They require Python 3 and
+  manual installation (`docs/agent-sessions.md`); they report no status and do
+  not resume agents.
   Focus, zoom, recent spaces, settled tabs and seen attention stay on this screen.
 - Every terminal is a core terminal. Herdr labels the ones it starts with
   `herdr.space=<id>` and `herdr.tab=<id>`. **A terminal with those
