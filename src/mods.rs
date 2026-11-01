@@ -70,7 +70,7 @@ pub fn write_workspace() -> std::io::Result<()> {
         let _ = std::fs::remove_file(dir.join("CLAUDE.md"));
     }
     write_if_changed(&dir.join("herdr.d.ts"), DECLARATIONS)?;
-    let types = gpui_shell::type_declarations(&gpui_shell::FrozenComponentRegistry::default());
+    let types = gpui_shell::type_declarations(&crate::wasm_view::components());
     write_if_changed(&dir.join("gpui-kit.d.ts"), &types)?;
     let _ = std::fs::remove_dir_all(frame_dir());
     for (path, bytes) in FRAME_MODS {
@@ -627,6 +627,11 @@ pub fn publish_focused(v: Value) -> bool {
     publish("focused", |s| (std::mem::replace(&mut s.focused, v.clone()), v))
 }
 
+/// Reads the window's snapshot (panes, focus, …) natively.
+pub fn with_snapshot<R>(f: impl FnOnce(&Snapshot) -> R) -> R {
+    SNAPSHOT.with(|s| f(&s.borrow()))
+}
+
 #[derive(Default)]
 struct LiveReads(HashMap<&'static str, u64>);
 
@@ -912,6 +917,7 @@ fn module(inst: Instance, copy: u64) -> HostModule {
         .async_function("hc", |a| Ok(exec_future("hc".into(), strings(a.get(0)), None, None)))
         .function("home", |_| Ok(home().to_string_lossy().into_owned().into()))
         .function("appHome", |_| Ok(app_dir().to_string_lossy().into_owned().into()))
+        .function("wasmView", |_| Ok(HostValue::Number(f64::from(crate::wasm_view::VERSION))))
         .function("fonts", |_| Ok(to_host(&json!(*FONTS.lock().unwrap()))))
         .function("updates", |_| Ok(to_host(&crate::update::status())))
         .function("presentUpdateNotes", |a| {

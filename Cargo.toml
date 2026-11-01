@@ -21,6 +21,7 @@ gpui = { package = "gpui-pre", version = "=0.3.8", features = ["render-to-image"
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 gpui-shell = { path = "vendor/gpui-kit/crates/shell" }
 gpui-base = { path = "vendor/gpui-kit/crates/base" }
+wasm-mods-protocol = { path = "../wasm-mods-native/crates/wasm-mods-protocol" }
 anyhow = "1"
 async-channel = "2"
 base64 = "0.22"
