@@ -507,8 +507,16 @@ fn list_row(
         }));
     }
     if let Some(child) = &it.child {
-        let inner = node(v, b, child, Ctx { in_row: false, virtual_row: row_h.is_some() }, window, cx);
-        return row.child(div().flex_1().min_w_0().overflow_hidden().child(inner)).into_any_element();
+        // A flush row's content takes its whole height (laid out across, it stretches
+        // to the row): lines sit one under another, their fills meet.
+        let inner = node(v, b, child, Ctx { in_row: flush, virtual_row: row_h.is_some() }, window, cx);
+        let cell = if flush {
+            row = row.items_stretch();
+            div().flex().flex_row().flex_1().min_w_0().h_full().overflow_hidden()
+        } else {
+            div().flex_1().min_w_0().overflow_hidden()
+        };
+        return row.child(cell.child(inner)).into_any_element();
     }
     if !it.tree.is_empty() {
         row = row.child(div().text_color(t.dim).child(it.tree.clone()));
@@ -572,9 +580,15 @@ fn list_row(
     row.into_any_element()
 }
 
-/// One height for every row of a virtual list: the list places rows by it.
-fn row_height(dense: bool) -> f32 {
-    if dense { 26.0 } else { 36.0 }
+/// One height for every row of a virtual list, in the protocol's pixels (drawn at the
+/// app's zoom; the list measures the first row, zoomed, so rows meet at any zoom). Code
+/// (dense, monospace: a diff's lines) sits tight, line under line.
+fn row_height(dense: bool, font: Font) -> f32 {
+    match (dense, font) {
+        (true, Font::Mono) => 20.0,
+        (true, _) => 26.0,
+        _ => 36.0,
+    }
 }
 
 /// A list of `window.total` rows of which the frame sent `items` (rows `window.first..`):
@@ -636,7 +650,7 @@ fn virtual_rows(v: &mut WasmView, id: &str, range: Range<usize>, window: &mut Wi
         v.send_events(vec![Event::VisibleRange { id: id.to_owned(), first: range.start as u64, count: count as u64 }], None);
     }
     let Some(frame) = v.frame.take() else { return range.map(|_| div().into_any_element()).collect() };
-    let Some(Node::List { items, selected, dense, style, window: Some(w), .. }) = find_list(&frame.ui, id) else {
+    let Some(Node::List { items, selected, dense, style, font, window: Some(w), .. }) = find_list(&frame.ui, id) else {
         v.frame = Some(frame);
         return range.map(|_| div().into_any_element()).collect();
     };
@@ -648,7 +662,7 @@ fn virtual_rows(v: &mut WasmView, id: &str, range: Range<usize>, window: &mut Wi
         mono: crate::settings::get().font_family.clone(),
         images_dir: v.props.images.as_ref().map(std::path::PathBuf::from),
     };
-    let (first, rh, soft) = (w.first as usize, row_height(*dense), *style == ListStyle::Soft);
+    let (first, rh, soft) = (w.first as usize, row_height(*dense, *font), *style == ListStyle::Soft);
     let sel = v.lists.get(id).map_or(*selected, |l| l.selected);
     let rows = range
         .map(|i| match i.checked_sub(first).and_then(|k| items.get(k)) {

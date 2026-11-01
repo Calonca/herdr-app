@@ -44,6 +44,21 @@ use wasm_mods_protocol::{Action, Event, Mods, Move, Node};
 /// What the script imports the components from.
 pub const MODULE: &str = "herdr-components";
 
+/// The view's key context: Tab and Shift+Tab are bound in it, ahead of the shell's own
+/// binding (moving the keyboard on), which would otherwise take them before the view's
+/// key handler sees them.
+const KEY_CONTEXT: &str = "WasmView";
+gpui::actions!(wasm_view, [Tab, TabBack]);
+
+/// Binds Tab and Shift+Tab in the view's context, once per app.
+fn bind_tab(cx: &mut gpui::App) {
+    static BOUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if BOUND.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    cx.bind_keys([gpui::KeyBinding::new("tab", Tab, Some(KEY_CONTEXT)), gpui::KeyBinding::new("shift-tab", TabBack, Some(KEY_CONTEXT))]);
+}
+
 /// This view's version, as `herdr.wasmView()` says it: what a bridge may rely on
 /// (1: `WasmViewState(props)`, `lost()`, `connect(port, token)`; 2: `focus()`).
 pub const VERSION: u32 = 2;
@@ -68,6 +83,7 @@ pub fn components() -> FrozenComponentRegistry {
             if !wasm_mods_protocol::wire::module_name_ok(&props.module) {
                 return Err(format!("WasmViewState: bad module name {:?}", props.module));
             }
+            bind_tab(cx);
             let view = cx.new(|cx| WasmView::new(props, window, cx));
             Ok(Box::new(view))
         })
@@ -679,6 +695,21 @@ impl WasmView {
         self.field_focused || (!self.fields.is_empty() && !self.focus.is_focused(window))
     }
 
+    /// Tab (Shift+Tab: `back`): the module's Secondary action, Shift in its mods; in a
+    /// text field, the keyboard moves on to the next field as the shell's Tab would.
+    fn tab(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.in_field(window) {
+            if back {
+                window.focus_prev(cx);
+            } else {
+                window.focus_next(cx);
+            }
+            return;
+        }
+        self.send_events(vec![Event::Action(Action::Secondary)], Some(Mods { shift: back, ..Mods::default() }));
+        cx.notify();
+    }
+
     /// Keys: actions, never raw keys (as the JavaScript bridge does).
     fn key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = e.keystroke.key.as_str();
@@ -809,7 +840,10 @@ impl Render for WasmView {
             .flex()
             .flex_col()
             .track_focus(&self.focus)
+            .key_context(KEY_CONTEXT)
             .on_key_down(cx.listener(|v, e: &KeyDownEvent, window, cx| v.key(e, window, cx)))
+            .on_action(cx.listener(|v, _: &Tab, window, cx| v.tab(false, window, cx)))
+            .on_action(cx.listener(|v, _: &TabBack, window, cx| v.tab(true, window, cx)))
             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|v, _, window, cx| {
                 if !v.field_focused {
                     v.focus.focus(window, cx);
